@@ -23,6 +23,7 @@ This repository contains:
 - `apps/p2p-test`: static browser test app (`dist/index.html` build target)
 - `scripts/deploy-guided.mjs`: interactive Cloudflare deploy script
 - `scripts/ci-deploy-worker.mjs`: CI deploy hook script with optional `credentials.json`
+- `scripts/gh-setup.mjs`: GitHub bootstrap script (private repo + env secrets + deploy triggers)
 - `scripts/smoke-signal.mjs`: local protocol smoke test
 
 ## Local Development
@@ -69,6 +70,32 @@ Then it:
 - Uploads secrets using `wrangler secret put`.
 - Deploys with `wrangler deploy`.
 
+## GitHub Bootstrap (Public Clone -> Private Deploy)
+Yes, a public repository can be cloned and then published as a private repository under your account.
+
+Run:
+```bash
+npm run gh:setup
+```
+
+What this script does with `gh`:
+- Optionally creates a private GitHub repository from your local clone.
+- Sets push defaults so you push to your private remote.
+- Configures GitHub Actions environment `production`.
+- Restricts that environment to the official branch (`main` by default).
+- Uploads `credentials.json` as environment secret `CF_CREDENTIALS_JSON`.
+- Sets repository variables (including `P2P_WORKER_URL`).
+- Optionally triggers `deploy-worker.yml` and `pages.yml`.
+
+Requirements before running:
+- `gh` authenticated (`gh auth login`).
+- Local `credentials.json` present (gitignored).
+
+Notes on keys and branches:
+- GitHub secrets are not directly branch-scoped.
+- The supported secure pattern is: environment secrets + environment branch policy.
+- This repo uses environment `production` for Worker deploys, so only allowed branches can access those secrets.
+
 ## Static P2P Test App (GitHub Pages)
 Build output target is `apps/p2p-test/dist/index.html` (with static assets in the same `dist/` folder).
 
@@ -109,6 +136,9 @@ It runs:
 ```bash
 npm run deploy:ci-worker
 ```
+
+Environment used by workflow:
+- `production` (configure secrets/variables there when using protected deployment secrets)
 
 ### Credentials resolution order
 `scripts/ci-deploy-worker.mjs` uses:
@@ -217,6 +247,7 @@ await mesh.start();
 - `npm run test`
 - `npm run build`
 - `npm run build:p2p-app`
+- `npm run gh:setup`
 - `npm run deploy:guided`
 - `npm run deploy:ci-worker`
 - `npm run deploy:watch-config`

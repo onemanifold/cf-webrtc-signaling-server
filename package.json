@@ -15,6 +15,7 @@
     "deploy:guided": "node scripts/deploy-guided.mjs",
     "deploy:ci-worker": "node scripts/ci-deploy-worker.mjs",
     "deploy:watch-config": "node scripts/watch-config-deploy.mjs",
+    "gh:setup": "node scripts/gh-setup.mjs",
     "smoke:local": "node scripts/smoke-signal.mjs"
   },
   "devDependencies": {
