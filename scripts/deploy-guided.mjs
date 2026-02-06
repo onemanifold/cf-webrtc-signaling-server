@@ -216,6 +216,40 @@ async function runCommand(command, args, options = {}) {
   });
 }
 
+async function runCommandWithOutput(command, args, options = {}) {
+  const env = { ...process.env, ...(options.env ?? {}) };
+  const child = spawn(command, args, {
+    cwd: options.cwd ?? ROOT,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const stdoutChunks = [];
+  const stderrChunks = [];
+
+  child.stdout.on("data", (chunk) => {
+    stdoutChunks.push(chunk);
+    process.stdout.write(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderrChunks.push(chunk);
+    process.stderr.write(chunk);
+  });
+
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const out = Buffer.concat(stdoutChunks).toString("utf8");
+      const err = Buffer.concat(stderrChunks).toString("utf8");
+      if (code === 0) {
+        resolve({ out, err });
+        return;
+      }
+      reject(new Error(err || `${command} ${args.join(" ")} failed with code ${code}`));
+    });
+  });
+}
+
 async function runCapture(command, args, options = {}) {
   const env = { ...process.env, ...(options.env ?? {}) };
   const child = spawn(command, args, {
@@ -390,6 +424,44 @@ function formatInviteMessage({ roomId, appUrl, shareUrl }) {
     `Open app: ${appUrl}`,
     `Direct join link: ${shareUrl}`,
   ].join("\n");
+}
+
+function parseWorkersDevUrlFromText(text, workerName) {
+  const candidates = String(text)
+    .match(/https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/gi)
+    ?.map((entry) => entry.replace(/\/+$/, "")) ?? [];
+
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  const normalizedWorker = workerName.toLowerCase();
+  const exact = candidates.find((url) => {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === `${normalizedWorker}.workers.dev` || host.startsWith(`${normalizedWorker}.`);
+  });
+
+  return exact || candidates[0];
+}
+
+function parseWorkersSubdomainFromUrl(workerUrl, workerName) {
+  try {
+    const host = new URL(workerUrl).hostname;
+    if (!host.endsWith(".workers.dev")) {
+      return "";
+    }
+    const withoutSuffix = host.slice(0, -".workers.dev".length);
+    const prefix = `${workerName}.`;
+    if (withoutSuffix === workerName) {
+      return "";
+    }
+    if (!withoutSuffix.startsWith(prefix)) {
+      return "";
+    }
+    return withoutSuffix.slice(prefix.length);
+  } catch {
+    return "";
+  }
 }
 
 async function fetchCloudflareAccounts(apiToken) {
@@ -616,6 +688,52 @@ async function verifyPagesDeployment(appUrl) {
   throw new Error(`GitHub Pages health check failed at ${appUrl}`);
 }
 
+function wranglerNeedsLogin(text) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("not authenticated") ||
+    lower.includes("please run `wrangler login`") ||
+    lower.includes("please run wrangler login")
+  );
+}
+
+async function ensureWranglerOauthAuth({ envOverrides, nonInteractive }) {
+  const probe = await runCapture("npx", ["wrangler", "whoami", "--config", WRANGLER_PATH], {
+    env: envOverrides,
+  }).catch((error) => ({
+    out: "",
+    err: error instanceof Error ? error.message : String(error),
+  }));
+
+  const probeText = `${probe.out}\n${probe.err}`;
+  if (!wranglerNeedsLogin(probeText)) {
+    return;
+  }
+
+  if (nonInteractive) {
+    throw new Error(
+      "Wrangler OAuth login is required but this shell is non-interactive. Use auth mode 1 (API token).",
+    );
+  }
+
+  output.write("Wrangler OAuth login required. Starting browser login...\n");
+  await runCommand("npx", ["wrangler", "login"], { env: envOverrides });
+
+  const verify = await runCapture("npx", ["wrangler", "whoami", "--config", WRANGLER_PATH], {
+    env: envOverrides,
+  }).catch((error) => ({
+    out: "",
+    err: error instanceof Error ? error.message : String(error),
+  }));
+
+  const verifyText = `${verify.out}\n${verify.err}`;
+  if (wranglerNeedsLogin(verifyText)) {
+    throw new Error(
+      "Wrangler OAuth login did not complete. Re-run with auth mode 1 (API token), or run `npx wrangler login` manually first.",
+    );
+  }
+}
+
 function buildCredentialsPayload({
   apiToken,
   accountId,
@@ -784,6 +902,9 @@ async function main() {
       })
     ).trim();
 
+    let turnTtlSeconds = "3600";
+    let turnRateMax = "10";
+    let turnRateWindowSec = "60";
     let turnSharedSecret = "";
     if (turnUrls) {
       const shared = (
@@ -795,26 +916,26 @@ async function main() {
         })
       ).trim();
       turnSharedSecret = shared || generateSecret();
-    }
 
-    const turnTtlSeconds = await chooseText({
-      rl,
-      prompt: "TURN credential TTL seconds",
-      defaultValue: "3600",
-      nonInteractive,
-    });
-    const turnRateMax = await chooseText({
-      rl,
-      prompt: "TURN rate limit max requests",
-      defaultValue: "10",
-      nonInteractive,
-    });
-    const turnRateWindowSec = await chooseText({
-      rl,
-      prompt: "TURN rate limit window seconds",
-      defaultValue: "60",
-      nonInteractive,
-    });
+      turnTtlSeconds = await chooseText({
+        rl,
+        prompt: "TURN credential TTL seconds",
+        defaultValue: "3600",
+        nonInteractive,
+      });
+      turnRateMax = await chooseText({
+        rl,
+        prompt: "TURN rate limit max requests",
+        defaultValue: "10",
+        nonInteractive,
+      });
+      turnRateWindowSec = await chooseText({
+        rl,
+        prompt: "TURN rate limit window seconds",
+        defaultValue: "60",
+        nonInteractive,
+      });
+    }
 
     const shouldDeploy = await chooseBoolean({
       rl,
@@ -852,11 +973,7 @@ async function main() {
         : {};
 
     if (authMode === "oauth") {
-      try {
-        await runCommand("npx", ["wrangler", "whoami", "--config", WRANGLER_PATH], { env: envOverrides });
-      } catch {
-        await runCommand("npx", ["wrangler", "login"], { env: envOverrides });
-      }
+      await ensureWranglerOauthAuth({ envOverrides, nonInteractive });
     }
 
     await putSecret("JOIN_TOKEN_SECRET", joinTokenSecret, envOverrides);
@@ -870,10 +987,20 @@ async function main() {
       await putSecret("TURN_SHARED_SECRET", turnSharedSecret, envOverrides);
     }
 
-    const workerUrl = buildWorkerUrl(workerName, workersSubdomain);
+    let workerUrl = buildWorkerUrl(workerName, workersSubdomain);
 
     if (shouldDeploy) {
-      await runCommand("npx", ["wrangler", "deploy", "--config", WRANGLER_PATH], { env: envOverrides });
+      const deployOutput = await runCommandWithOutput("npx", ["wrangler", "deploy", "--config", WRANGLER_PATH], {
+        env: envOverrides,
+      });
+      const detectedWorkerUrl = parseWorkersDevUrlFromText(`${deployOutput.out}\n${deployOutput.err}`, workerName);
+      if (detectedWorkerUrl) {
+        workerUrl = detectedWorkerUrl;
+        const detectedSubdomain = parseWorkersSubdomainFromUrl(detectedWorkerUrl, workerName);
+        if (detectedSubdomain) {
+          workersSubdomain = detectedSubdomain;
+        }
+      }
       output.write("\nDeploy completed.\n");
       output.write(`Verifying Worker health at ${workerUrl}/health ...\n`);
       await verifyWorkerHealth(workerUrl);
