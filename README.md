@@ -24,6 +24,11 @@ npm install
 npm run deploy:guided
 ```
 
+Or run full lifecycle (reset + deploy) from one command:
+```bash
+npm run lifecycle:e2e
+```
+
 3. Optional (skip token prompt):
 ```bash
 node scripts/deploy-guided.mjs --cf-api-token <CLOUDFLARE_API_TOKEN>
@@ -51,6 +56,10 @@ What the guided script does:
 - Preview reset actions:
 ```bash
 npm run reset:dry-run
+```
+- Preview lifecycle reset phase (no deploy):
+```bash
+npm run lifecycle:dry-run
 ```
 - Run guided reset:
 ```bash

@@ -13,6 +13,8 @@
     "typecheck": "npm run --workspaces --if-present typecheck",
     "build:p2p-app": "npm run -w @cf-webrtc/p2p-test-app build",
     "deploy:guided": "node scripts/deploy-guided.mjs",
+    "lifecycle:e2e": "node scripts/lifecycle-e2e.mjs",
+    "lifecycle:dry-run": "node scripts/lifecycle-e2e.mjs --reset-dry-run --non-interactive",
     "deploy:ci-worker": "node scripts/ci-deploy-worker.mjs",
     "reset:guided": "node scripts/reset-guided.mjs",
     "reset:dry-run": "node scripts/reset-guided.mjs --dry-run --non-interactive",

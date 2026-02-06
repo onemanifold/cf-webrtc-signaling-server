@@ -1244,6 +1244,21 @@ async function main() {
           `node scripts/create-test-links.mjs --credentials-file ${resolvedCredentialsPath} --worker-url ${workerUrl} --app-url ${appUrl} --room ${inviteRoom || "main-room"}\n`,
         );
       }
+
+      const shouldOpenPages = await chooseBoolean({
+        rl,
+        prompt: "Open GitHub Pages app in browser now?",
+        defaultValue: true,
+        nonInteractive,
+      });
+      if (shouldOpenPages) {
+        const opened = await openBrowserUrl(appUrl);
+        if (opened) {
+          output.write(`Opened GitHub Pages app: ${appUrl}\n`);
+        } else {
+          output.write(`Open this URL manually: ${appUrl}\n`);
+        }
+      }
     }
   } finally {
     rl.close();

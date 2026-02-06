@@ -7,6 +7,13 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 const ROOT = process.cwd();
+const GH_COMMAND_TIMEOUT_MS = 60_000;
+const GH_ENV_OVERRIDES = {
+  GH_NO_UPDATE_NOTIFIER: "1",
+  GH_PROMPT_DISABLED: "1",
+  NO_COLOR: "1",
+  CLICOLOR: "0",
+};
 
 function parseCliArgs(argv) {
   const out = {
@@ -133,28 +140,48 @@ function buildWorkerUrl(workerName, workersSubdomain) {
 }
 
 async function run(command, args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 0;
   const child = spawn(command, args, {
     cwd: options.cwd ?? ROOT,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: { ...process.env, ...GH_ENV_OVERRIDES, ...(options.env ?? {}) },
     stdio: options.stdio ?? "inherit",
   });
 
   return new Promise((resolve, reject) => {
+    let timeoutId = null;
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        child.kill("SIGTERM");
+      }, timeoutMs);
+    }
+
+    const clear = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+
     child.on("error", reject);
     child.on("close", (code) => {
+      clear();
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`));
+      reject(
+        new Error(
+          `${command} ${args.join(" ")} failed with code ${code}${timeoutMs > 0 ? ` (timeout ${timeoutMs}ms)` : ""}`,
+        ),
+      );
     });
   });
 }
 
 async function runCapture(command, args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 0;
   const child = spawn(command, args, {
     cwd: options.cwd ?? ROOT,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: { ...process.env, ...GH_ENV_OVERRIDES, ...(options.env ?? {}) },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -164,15 +191,33 @@ async function runCapture(command, args, options = {}) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
 
   return new Promise((resolve, reject) => {
+    let timeoutId = null;
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        child.kill("SIGTERM");
+      }, timeoutMs);
+    }
+
+    const clear = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+
     child.on("error", reject);
     child.on("close", (code) => {
+      clear();
       const out = Buffer.concat(stdout).toString("utf8").trim();
       const err = Buffer.concat(stderr).toString("utf8").trim();
       if (code === 0) {
         resolve({ out, err });
         return;
       }
-      reject(new Error(err || `${command} ${args.join(" ")} failed with code ${code}`));
+      reject(
+        new Error(
+          err || `${command} ${args.join(" ")} failed with code ${code}${timeoutMs > 0 ? ` (timeout ${timeoutMs}ms)` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -190,9 +235,12 @@ async function ghApiWithJson(method, pathSpec, payload) {
   await new Promise((resolve, reject) => {
     const child = spawn("gh", ["api", "--method", method, pathSpec, "--input", "-"], {
       cwd: ROOT,
-      env: { ...process.env },
+      env: { ...process.env, ...GH_ENV_OVERRIDES },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const timeoutId = setTimeout(() => {
+      child.kill("SIGTERM");
+    }, GH_COMMAND_TIMEOUT_MS);
 
     const stderr = [];
     child.stderr.on("data", (chunk) => stderr.push(chunk));
@@ -202,11 +250,17 @@ async function ghApiWithJson(method, pathSpec, payload) {
 
     child.on("error", reject);
     child.on("close", (code) => {
+      clearTimeout(timeoutId);
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(Buffer.concat(stderr).toString("utf8") || `gh api ${pathSpec} failed`));
+      reject(
+        new Error(
+          Buffer.concat(stderr).toString("utf8") ||
+            `gh api ${pathSpec} failed or timed out (${GH_COMMAND_TIMEOUT_MS}ms)`,
+        ),
+      );
     });
   });
 }
@@ -242,9 +296,12 @@ async function setSecretFromFile({ repo, envName, name, filePath }) {
   await new Promise((resolve, reject) => {
     const child = spawn("gh", ["secret", "set", name, "--repo", repo, "--env", envName], {
       cwd: ROOT,
-      env: { ...process.env },
+      env: { ...process.env, ...GH_ENV_OVERRIDES },
       stdio: ["pipe", "inherit", "inherit"],
     });
+    const timeoutId = setTimeout(() => {
+      child.kill("SIGTERM");
+    }, GH_COMMAND_TIMEOUT_MS);
 
     readFile(filePath)
       .then((buffer) => {
@@ -255,11 +312,12 @@ async function setSecretFromFile({ repo, envName, name, filePath }) {
 
     child.on("error", reject);
     child.on("close", (code) => {
+      clearTimeout(timeoutId);
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(`failed to set secret ${name}`));
+      reject(new Error(`failed to set secret ${name} (possibly timed out at ${GH_COMMAND_TIMEOUT_MS}ms)`));
     });
   });
 }
@@ -269,7 +327,7 @@ async function setVariable({ repo, name, value, envName }) {
   if (envName) {
     args.push("--env", envName);
   }
-  await run("gh", args);
+  await run("gh", args, { timeoutMs: GH_COMMAND_TIMEOUT_MS });
 }
 
 function pagesUrl(repo) {
@@ -469,10 +527,12 @@ async function main() {
     output.write(`Set environment secret CF_CREDENTIALS_JSON on ${targetRepo}/${envName}.\n`);
 
     const workerUrl = buildWorkerUrl(configuredWorkerName, configuredWorkersSubdomain);
+    output.write("Setting repository variable P2P_WORKER_URL...\n");
     await setVariable({ repo: targetRepo, name: "P2P_WORKER_URL", value: workerUrl });
+    output.write("Setting repository variable WORKER_NAME...\n");
     await setVariable({ repo: targetRepo, name: "WORKER_NAME", value: configuredWorkerName });
 
-    output.write(`Set repository variable P2P_WORKER_URL=${workerUrl}.\n`);
+    output.write(`Set repository variables: P2P_WORKER_URL=${workerUrl}, WORKER_NAME=${configuredWorkerName}\n`);
 
     const runWorkflowsNow = await chooseBoolean({
       rl,
@@ -482,8 +542,12 @@ async function main() {
     });
 
     if (runWorkflowsNow) {
-      await run("gh", ["workflow", "run", "deploy-worker.yml", "--repo", targetRepo]);
-      await run("gh", ["workflow", "run", "pages.yml", "--repo", targetRepo]);
+      await run("gh", ["workflow", "run", "deploy-worker.yml", "--repo", targetRepo], {
+        timeoutMs: GH_COMMAND_TIMEOUT_MS,
+      });
+      await run("gh", ["workflow", "run", "pages.yml", "--repo", targetRepo], {
+        timeoutMs: GH_COMMAND_TIMEOUT_MS,
+      });
       output.write("Triggered workflows: deploy-worker.yml and pages.yml\n");
     }
 

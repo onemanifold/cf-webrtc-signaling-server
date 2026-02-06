@@ -282,8 +282,19 @@ function isNotFoundLike(message) {
   return (
     lower.includes("404") ||
     lower.includes("not found") ||
+    lower.includes("does not exist") ||
     lower.includes("could not resolve to a repository") ||
     lower.includes("resource not accessible")
+  );
+}
+
+function isAuthRequiredLike(message) {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("not authenticated") ||
+    lower.includes("please run `wrangler login`") ||
+    lower.includes("please run wrangler login") ||
+    lower.includes("set a cloudflare_api_token")
   );
 }
 
@@ -403,6 +414,12 @@ async function undeployWorker({ dryRun, shouldUndeploy, workerName }) {
     if (isNotFoundLike(message)) {
       output.write(`Worker '${workerName}' not found (already clean).\n`);
       return "not-found";
+    }
+    if (isAuthRequiredLike(message)) {
+      output.write(
+        `Skipped worker undeploy for '${workerName}' because Wrangler is not authenticated in this shell.\n`,
+      );
+      return "skipped-not-authenticated";
     }
     throw error;
   }
