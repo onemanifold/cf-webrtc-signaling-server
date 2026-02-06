@@ -1,0 +1,5 @@
+JOIN_TOKEN_SECRET=replace-with-random-32-bytes
+INTERNAL_API_SECRET=replace-with-random-32-bytes
+DEV_ISSUER_SECRET=replace-with-random-32-bytes
+TURN_SHARED_SECRET=replace-with-turn-secret
+TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp

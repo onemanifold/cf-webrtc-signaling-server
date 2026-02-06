@@ -1,0 +1,52 @@
+name: Deploy Cloudflare Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/server/**"
+      - "scripts/ci-deploy-worker.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Materialize credentials.json from secret (optional)
+        if: ${{ secrets.CF_CREDENTIALS_JSON != '' }}
+        run: |
+          printf '%s' '${{ secrets.CF_CREDENTIALS_JSON }}' > credentials.json
+
+      - name: Deploy Worker via CI hook
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          ALLOW_DEV_TOKEN_ISSUER: ${{ vars.ALLOW_DEV_TOKEN_ISSUER }}
+          TURN_URLS: ${{ vars.TURN_URLS }}
+          TURN_TTL_SECONDS: ${{ vars.TURN_TTL_SECONDS }}
+          TURN_RATE_LIMIT_MAX: ${{ vars.TURN_RATE_LIMIT_MAX }}
+          TURN_RATE_LIMIT_WINDOW_SEC: ${{ vars.TURN_RATE_LIMIT_WINDOW_SEC }}
+          JOIN_TOKEN_SECRET: ${{ secrets.JOIN_TOKEN_SECRET }}
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          DEV_ISSUER_SECRET: ${{ secrets.DEV_ISSUER_SECRET }}
+          TURN_SHARED_SECRET: ${{ secrets.TURN_SHARED_SECRET }}
+        run: node scripts/ci-deploy-worker.mjs

@@ -1,0 +1,24 @@
+{
+  "name": "cf-webrtc-signaling-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/server",
+    "packages/client",
+    "apps/p2p-test"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --if-present build",
+    "test": "npm run --workspaces --if-present test",
+    "typecheck": "npm run --workspaces --if-present typecheck",
+    "build:p2p-app": "npm run -w @cf-webrtc/p2p-test build",
+    "deploy:guided": "node scripts/deploy-guided.mjs",
+    "deploy:ci-worker": "node scripts/ci-deploy-worker.mjs",
+    "deploy:watch-config": "node scripts/watch-config-deploy.mjs",
+    "smoke:local": "node scripts/smoke-signal.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

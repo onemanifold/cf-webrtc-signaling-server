@@ -1,0 +1,22 @@
+name = "cf-webrtc-signaling"
+main = "src/index.ts"
+compatibility_date = "2025-02-01"
+workers_dev = true
+
+[vars]
+ALLOW_DEV_TOKEN_ISSUER = "false"
+TURN_TTL_SECONDS = "3600"
+TURN_RATE_LIMIT_MAX = "10"
+TURN_RATE_LIMIT_WINDOW_SEC = "60"
+
+[[durable_objects.bindings]]
+name = "SIGNALING_ROOM"
+class_name = "SignalingRoomDO"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMIT_DO"
+class_name = "RateLimitDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalingRoomDO", "RateLimitDO"]

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>P2P Test App</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <h1>P2P Test App</h1>
+        <p>GitHub Pages static app for Cloudflare Durable Object WebRTC signaling.</p>
+      </header>
+
+      <section class="panel">
+        <h2>Connection</h2>
+        <div class="grid">
+          <label>
+            Worker Base URL
+            <input id="workerBaseUrl" placeholder="https://your-worker.workers.dev" />
+          </label>
+          <label>
+            Room ID
+            <input id="roomId" value="main-room" />
+          </label>
+          <label>
+            User ID
+            <input id="userId" value="user-1" />
+          </label>
+          <label>
+            Alias
+            <input id="alias" value="alice" />
+          </label>
+          <label>
+            Join Token (optional)
+            <input id="joinToken" placeholder="Paste token or issue below" />
+          </label>
+          <label>
+            Internal Secret (dev token issue only)
+            <input id="internalSecret" type="password" placeholder="INTERNAL_API_SECRET" />
+          </label>
+        </div>
+        <div class="row">
+          <button id="issueTokenBtn">Issue Token</button>
+          <button id="connectBtn">Connect</button>
+          <button id="disconnectBtn" disabled>Disconnect</button>
+          <button id="startMediaBtn">Start Camera + Mic</button>
+        </div>
+        <div class="row">
+          <button id="copyShareLinkBtn">Copy Share Link</button>
+          <input id="shareLink" readonly />
+        </div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Alias Discovery</h2>
+          <div class="row">
+            <input id="resolveAliasInput" placeholder="alias to resolve" />
+            <button id="resolveAliasBtn" disabled>Resolve Alias</button>
+            <button id="claimAliasBtn" disabled>Claim Alias</button>
+          </div>
+          <pre id="resolveResult"></pre>
+        </div>
+        <div>
+          <h2>Peers</h2>
+          <ul id="peerList"></ul>
+        </div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Data Channel Chat</h2>
+          <div class="row">
+            <input id="chatInput" placeholder="type message" />
+            <button id="sendChatBtn" disabled>Broadcast</button>
+          </div>
+          <pre id="chatLog"></pre>
+        </div>
+        <div>
+          <h2>Events</h2>
+          <pre id="eventLog"></pre>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Media</h2>
+        <div class="videos">
+          <div class="video-card">
+            <h3>Local</h3>
+            <video id="localVideo" autoplay playsinline muted></video>
+          </div>
+          <div id="remoteVideos" class="remote-grid"></div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
