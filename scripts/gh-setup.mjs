@@ -8,6 +8,7 @@ import { stdin as input, stdout as output } from "node:process";
 
 const ROOT = process.cwd();
 const GH_COMMAND_TIMEOUT_MS = 60_000;
+const GH_SECRET_TIMEOUT_MS = 180_000;
 const GH_ENV_OVERRIDES = {
   GH_NO_UPDATE_NOTIFIER: "1",
   GH_PROMPT_DISABLED: "1",
@@ -297,33 +298,12 @@ async function ensureEnvWithBranchPolicy(repo, envName, branch) {
 }
 
 async function setSecretFromFile({ repo, envName, name, filePath }) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("gh", ["secret", "set", name, "--repo", repo, "--env", envName], {
-      cwd: ROOT,
-      env: { ...process.env, ...GH_ENV_OVERRIDES },
-      stdio: ["pipe", "inherit", "inherit"],
-    });
-    const timeoutId = setTimeout(() => {
-      child.kill("SIGTERM");
-    }, GH_COMMAND_TIMEOUT_MS);
-
-    readFile(filePath)
-      .then((buffer) => {
-        child.stdin.write(buffer);
-        child.stdin.end();
-      })
-      .catch(reject);
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      clearTimeout(timeoutId);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`failed to set secret ${name} (possibly timed out at ${GH_COMMAND_TIMEOUT_MS}ms)`));
-    });
-  });
+  const body = await readFile(filePath, "utf8");
+  await run(
+    "gh",
+    ["secret", "set", name, "--repo", repo, "--env", envName, "--body", body],
+    { timeoutMs: GH_SECRET_TIMEOUT_MS },
+  );
 }
 
 async function setVariable({ repo, name, value, envName }) {
@@ -522,6 +502,7 @@ async function main() {
     await ensureEnvWithBranchPolicy(targetRepo, envName, officialBranch);
     output.write(`Configured environment '${envName}' with branch policy '${officialBranch}'.\n`);
 
+    output.write("Setting environment secret CF_CREDENTIALS_JSON...\n");
     await setSecretFromFile({
       repo: targetRepo,
       envName,

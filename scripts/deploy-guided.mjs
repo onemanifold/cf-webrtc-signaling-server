@@ -1042,7 +1042,7 @@ async function main() {
     const wantsGithubAutomation = await chooseBoolean({
       rl,
       prompt: "Run GitHub bootstrap + build + Pages/Worker publish now?",
-      defaultValue: hasGithubAutomationInputs,
+      defaultValue: nonInteractive ? hasGithubAutomationInputs : true,
       nonInteractive,
     });
 
