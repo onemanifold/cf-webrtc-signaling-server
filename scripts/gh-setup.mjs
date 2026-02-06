@@ -314,6 +314,49 @@ async function setVariable({ repo, name, value, envName }) {
   await run("gh", args, { timeoutMs: GH_COMMAND_TIMEOUT_MS });
 }
 
+async function ensurePagesWorkflowMode(repo) {
+  const endpoint = `repos/${repo}/pages`;
+  output.write("Ensuring GitHub Pages is enabled (workflow mode)...\n");
+
+  try {
+    await runCapture("gh", ["api", "--method", "POST", endpoint, "-f", "build_type=workflow"], {
+      timeoutMs: GH_COMMAND_TIMEOUT_MS,
+    });
+    output.write("GitHub Pages enabled (workflow mode).\n");
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const lower = message.toLowerCase();
+    if (
+      lower.includes("already") ||
+      lower.includes("unprocessable") ||
+      lower.includes("422") ||
+      lower.includes("409")
+    ) {
+      output.write("GitHub Pages already enabled.\n");
+      return;
+    }
+  }
+
+  try {
+    const { out } = await runCapture("gh", ["api", endpoint], {
+      timeoutMs: GH_COMMAND_TIMEOUT_MS,
+    });
+    const payload = JSON.parse(out || "{}");
+    if (payload.build_type === "workflow") {
+      output.write("GitHub Pages already enabled (workflow mode).\n");
+      return;
+    }
+  } catch {
+    // keep going to PUT attempt below
+  }
+
+  await runCapture("gh", ["api", "--method", "PUT", endpoint, "-f", "build_type=workflow"], {
+    timeoutMs: GH_COMMAND_TIMEOUT_MS,
+  });
+  output.write("Updated GitHub Pages to workflow mode.\n");
+}
+
 function pagesUrl(repo) {
   const [owner, name] = repo.split("/");
   return `https://${owner}.github.io/${name}/`;
@@ -518,6 +561,7 @@ async function main() {
     await setVariable({ repo: targetRepo, name: "WORKER_NAME", value: configuredWorkerName });
 
     output.write(`Set repository variables: P2P_WORKER_URL=${workerUrl}, WORKER_NAME=${configuredWorkerName}\n`);
+    await ensurePagesWorkflowMode(targetRepo);
 
     const runWorkflowsNow = await chooseBoolean({
       rl,

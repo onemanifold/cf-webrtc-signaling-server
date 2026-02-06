@@ -39,9 +39,11 @@ What the guided script does:
 - Verifies Worker health at `https://<worker>.<subdomain>.workers.dev/health`.
 - Writes local `credentials.json` (gitignored).
 - Optionally bootstraps GitHub repo/environment/secrets/variables.
+- Ensures GitHub Pages is enabled in workflow mode before Pages deploy.
 - Builds the Vite P2P app.
 - Optionally triggers and waits for Worker + Pages workflows.
 - Verifies GitHub Pages URL and prints share/invite links.
+- Opens GitHub Pages URL automatically after successful end-to-end publish.
 - Auto-generates `JOIN_TOKEN_SECRET` and `INTERNAL_API_SECRET` when not provided.
 - Accepts manual secret overrides (`--join-token-secret`, `--internal-api-secret`).
 - Enables `/token/issue` by default so testing works immediately (you can disable it).
