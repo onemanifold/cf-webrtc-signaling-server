@@ -60,10 +60,18 @@ Run:
 npm run deploy:guided
 ```
 
+Or pass token directly:
+```bash
+node scripts/deploy-guided.mjs --cf-api-token <CLOUDFLARE_API_TOKEN>
+```
+
 The script asks for:
-- Cloudflare auth mode: OAuth login or API token + account ID.
+- Cloudflare auth mode: API token (recommended) or OAuth.
 - Worker name and runtime vars.
 - Secrets (`JOIN_TOKEN_SECRET`, `INTERNAL_API_SECRET`, optional TURN/dev issuer secrets).
+
+If no token is provided, it prints direct instructions and waits for paste input.
+With token mode, account ID is auto-resolved from the token (with manual fallback only if lookup fails).
 
 Then it:
 - Updates `packages/server/wrangler.toml`.

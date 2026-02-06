@@ -10,6 +10,48 @@ const ROOT = process.cwd();
 const SERVER_DIR = path.join(ROOT, "packages", "server");
 const WRANGLER_PATH = path.join(SERVER_DIR, "wrangler.toml");
 
+function parseCliArgs(argv) {
+  const out = {
+    cfApiToken: "",
+    workerName: "",
+    authMode: "",
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+
+    if (["--cf-api-token", "--api-token", "--token"].includes(arg)) {
+      if (!next) {
+        throw new Error(`${arg} expects a value`);
+      }
+      out.cfApiToken = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--worker-name") {
+      if (!next) {
+        throw new Error("--worker-name expects a value");
+      }
+      out.workerName = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--auth-mode") {
+      if (!next) {
+        throw new Error("--auth-mode expects 'oauth' or 'api'");
+      }
+      out.authMode = next.trim().toLowerCase();
+      i += 1;
+      continue;
+    }
+  }
+
+  return out;
+}
+
 function generateSecret() {
   return randomBytes(32).toString("base64url");
 }
@@ -147,32 +189,135 @@ function parseYesNo(value, fallback) {
   return fallback;
 }
 
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function printTokenOnboarding() {
+  output.write("\nCloudflare API token required for automated account lookup.\n");
+  output.write("1. Open: https://dash.cloudflare.com/profile/api-tokens\n");
+  output.write(
+    "2. Create token with Account -> Workers Scripts -> Edit (scope to your account)\n",
+  );
+  output.write("3. Copy token and paste below (it is shown once)\n\n");
+}
+
+async function fetchCloudflareAccounts(apiToken) {
+  const response = await fetch("https://api.cloudflare.com/client/v4/accounts", {
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const body = await response.json().catch(() => ({}));
+
+  if (!response.ok || body?.success === false) {
+    const apiError =
+      Array.isArray(body?.errors) && body.errors[0]?.message ? String(body.errors[0].message) : "Unknown API error";
+    throw new Error(`Cloudflare API account lookup failed (${response.status}): ${apiError}`);
+  }
+
+  const accounts = Array.isArray(body?.result) ? body.result : [];
+  if (accounts.length === 0) {
+    throw new Error("No Cloudflare accounts available for this token");
+  }
+
+  return accounts.map((account) => ({
+    id: String(account.id ?? ""),
+    name: String(account.name ?? ""),
+  }));
+}
+
+async function resolveAccountFromToken(apiToken, rl) {
+  try {
+    const accounts = await fetchCloudflareAccounts(apiToken);
+
+    if (accounts.length === 1) {
+      const only = accounts[0];
+      output.write(`Auto-selected Cloudflare account: ${only.name} (${only.id})\n`);
+      return only;
+    }
+
+    output.write("Cloudflare accounts available for this token:\n");
+    accounts.forEach((account, index) => {
+      output.write(`${index + 1}. ${account.name} (${account.id})\n`);
+    });
+
+    const selectedInput = (await rl.question(`Select account [1-${accounts.length}] [1]: `)).trim();
+    const selected = selectedInput ? Number.parseInt(selectedInput, 10) : 1;
+
+    if (!Number.isFinite(selected) || selected < 1 || selected > accounts.length) {
+      throw new Error("Invalid account selection");
+    }
+
+    return accounts[selected - 1];
+  } catch (error) {
+    output.write(`Could not resolve account from token automatically: ${formatErrorMessage(error)}\n`);
+    const manualAccountId = (await rl.question("Cloudflare account ID (manual fallback): ")).trim();
+    if (!manualAccountId) {
+      throw new Error("Cloudflare account ID is required");
+    }
+    return {
+      id: manualAccountId,
+      name: "manual",
+    };
+  }
+}
+
 async function main() {
   if (!(await fileExists(WRANGLER_PATH))) {
     throw new Error(`Missing wrangler config at ${WRANGLER_PATH}`);
   }
 
+  const args = parseCliArgs(process.argv.slice(2));
+  const tokenFromArg = args.cfApiToken || process.env.CF_API_TOKEN || "";
+
   const rl = readline.createInterface({ input, output });
 
   try {
-    const workerName = (await rl.question("Worker name [cf-webrtc-signaling]: ")).trim() || "cf-webrtc-signaling";
+    const workerName =
+      args.workerName || (await rl.question("Worker name [cf-webrtc-signaling]: ")).trim() || "cf-webrtc-signaling";
 
-    const authModeInput = (await rl.question(
-      "Auth mode: 1) wrangler login (OAuth) 2) API token + account ID [1]: ",
-    )
-      .trim()
-      .toLowerCase();
-    const authMode = authModeInput === "2" ? "api" : "oauth";
+    const inferredAuthMode = "api";
+    const authModeInput =
+      args.authMode ||
+      (
+        await rl.question(
+          `Auth mode: 1) API token + auto account lookup 2) wrangler login (OAuth) [${
+            inferredAuthMode === "api" ? "1" : "2"
+          }]: `,
+        )
+      )
+        .trim()
+        .toLowerCase();
+
+    let authMode = inferredAuthMode;
+    if (authModeInput === "1" || authModeInput === "api") {
+      authMode = "api";
+    } else if (authModeInput === "2" || authModeInput === "oauth") {
+      authMode = "oauth";
+    }
 
     let accountId = "";
-    let apiToken = "";
+    let accountName = "";
+    let apiToken = tokenFromArg;
 
     if (authMode === "api") {
-      accountId = (await rl.question("Cloudflare account ID: ")).trim();
-      apiToken = (await rl.question("Cloudflare API token: ")).trim();
-      if (!accountId || !apiToken) {
-        throw new Error("account ID and API token are required for API auth mode");
+      if (!apiToken) {
+        printTokenOnboarding();
+        apiToken = (await rl.question("Cloudflare API token (paste): ")).trim();
       }
+      if (!apiToken) {
+        throw new Error("API token is required for API auth mode");
+      }
+
+      const selectedAccount = await resolveAccountFromToken(apiToken, rl);
+      accountId = selectedAccount.id;
+      accountName = selectedAccount.name;
     }
 
     const joinTokenSecretInput = (await rl.question("JOIN_TOKEN_SECRET (leave blank to generate): ")).trim();
@@ -254,6 +399,10 @@ async function main() {
     output.write("\nSummary:\n");
     output.write(`- Worker: ${workerName}\n`);
     output.write(`- Wrangler config: ${WRANGLER_PATH}\n`);
+    output.write(`- Auth mode: ${authMode}\n`);
+    if (authMode === "api") {
+      output.write(`- Cloudflare account: ${accountName} (${accountId})\n`);
+    }
     output.write(`- Dev issuer endpoint: ${allowDevIssuer ? "enabled" : "disabled"}\n`);
     output.write(`- TURN configured: ${turnUrls ? "yes" : "no"}\n`);
   } finally {
