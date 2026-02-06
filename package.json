@@ -16,7 +16,8 @@
     "deploy:ci-worker": "node scripts/ci-deploy-worker.mjs",
     "deploy:watch-config": "node scripts/watch-config-deploy.mjs",
     "gh:setup": "node scripts/gh-setup.mjs",
-    "smoke:local": "node scripts/smoke-signal.mjs"
+    "smoke:local": "node scripts/smoke-signal.mjs",
+    "test:links": "node scripts/create-test-links.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

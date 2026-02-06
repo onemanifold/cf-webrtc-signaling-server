@@ -19,6 +19,8 @@ function parseCliArgs(argv) {
     authMode: "",
     repo: "",
     branch: "",
+    joinTokenSecret: "",
+    internalApiSecret: "",
     nonInteractive: false,
   };
 
@@ -67,6 +69,24 @@ function parseCliArgs(argv) {
         throw new Error("--branch expects a branch name");
       }
       out.branch = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--join-token-secret") {
+      if (!next) {
+        throw new Error("--join-token-secret expects a value");
+      }
+      out.joinTokenSecret = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--internal-api-secret") {
+      if (!next) {
+        throw new Error("--internal-api-secret expects a value");
+      }
+      out.internalApiSecret = next.trim();
       i += 1;
       continue;
     }
@@ -719,7 +739,7 @@ async function main() {
       await chooseText({
         rl,
         prompt: "JOIN_TOKEN_SECRET (leave blank to generate)",
-        defaultValue: "",
+        defaultValue: args.joinTokenSecret || process.env.JOIN_TOKEN_SECRET || "",
         nonInteractive,
       })
     ).trim();
@@ -729,7 +749,7 @@ async function main() {
       await chooseText({
         rl,
         prompt: "INTERNAL_API_SECRET (leave blank to generate)",
-        defaultValue: "",
+        defaultValue: args.internalApiSecret || process.env.INTERNAL_API_SECRET || "",
         nonInteractive,
       })
     ).trim();
@@ -737,8 +757,8 @@ async function main() {
 
     const allowDevIssuer = await chooseBoolean({
       rl,
-      prompt: "Enable /token/issue dev endpoint?",
-      defaultValue: false,
+      prompt: "Enable /token/issue dev endpoint (recommended for immediate browser testing)?",
+      defaultValue: true,
       nonInteractive,
     });
 
@@ -932,6 +952,7 @@ async function main() {
     let officialBranch = "";
     let appUrl = "";
     let inviteRoom = "";
+    let testLinksOutput = "";
 
     if (wantsGithubAutomation) {
       if (!canRunGithubAutomation) {
@@ -1020,6 +1041,29 @@ async function main() {
         defaultValue: "main-room",
         nonInteractive,
       });
+
+      if (allowDevIssuer && shouldWriteCredentials) {
+        output.write("Generating ready-to-test browser links...\n");
+        try {
+          const { out } = await runCapture("node", [
+            "scripts/create-test-links.mjs",
+            "--credentials-file",
+            resolvedCredentialsPath,
+            "--worker-url",
+            workerUrl,
+            "--app-url",
+            appUrl,
+            "--room",
+            inviteRoom || "main-room",
+          ]);
+          testLinksOutput = out;
+          if (out) {
+            output.write(`${out}\n`);
+          }
+        } catch (error) {
+          output.write(`Could not generate browser test links automatically: ${formatErrorMessage(error)}\n`);
+        }
+      }
     }
 
     output.write("\nSummary:\n");
@@ -1044,6 +1088,12 @@ async function main() {
       output.write(`- Peer invite link: ${inviteLink}\n`);
       output.write("\nInvite message:\n");
       output.write(`${formatInviteMessage({ roomId: inviteRoom || "main-room", appUrl, shareUrl: inviteLink })}\n`);
+      if (!testLinksOutput && allowDevIssuer) {
+        output.write("\nGenerate one-click browser test links with:\n");
+        output.write(
+          `node scripts/create-test-links.mjs --credentials-file ${resolvedCredentialsPath} --worker-url ${workerUrl} --app-url ${appUrl} --room ${inviteRoom || "main-room"}\n`,
+        );
+      }
     }
   } finally {
     rl.close();

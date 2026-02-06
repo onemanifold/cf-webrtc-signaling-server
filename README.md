@@ -36,6 +36,9 @@ What the guided script does:
 - Builds the Vite P2P app.
 - Optionally triggers and waits for Worker + Pages workflows.
 - Verifies GitHub Pages URL and prints share/invite links.
+- Auto-generates `JOIN_TOKEN_SECRET` and `INTERNAL_API_SECRET` when not provided.
+- Accepts manual secret overrides (`--join-token-secret`, `--internal-api-secret`).
+- Enables `/token/issue` by default so testing works immediately (you can disable it).
 
 ## Cloudflare Login + Token (Practical Path)
 1. Open `https://dash.cloudflare.com`.
@@ -90,8 +93,8 @@ Behavior:
 - Uses `credentials.json` when present.
 - Otherwise uses env/CLI values.
 - If token exists but account ID is missing, it auto-resolves account from Cloudflare API.
-- In interactive local mode, if required values are missing it prompts and can generate secrets.
-- In non-interactive CI mode, it fails fast with exact missing variables.
+- Automatically generates missing `JOIN_TOKEN_SECRET` and `INTERNAL_API_SECRET`.
+- Manual secret override is supported via CLI/env/credentials.
 
 Useful non-interactive flags:
 ```bash
@@ -99,6 +102,8 @@ node scripts/ci-deploy-worker.mjs \
   --cf-api-token <TOKEN> \
   --cf-account-id <ACCOUNT_ID> \
   --worker-name <WORKER_NAME> \
+  --join-token-secret <JOIN_TOKEN_SECRET> \
+  --internal-api-secret <INTERNAL_API_SECRET> \
   --non-interactive
 ```
 
@@ -128,6 +133,22 @@ npm run -w @cf-webrtc/p2p-test-app preview
 
 Then point the app to your deployed Worker URL.
 
+### Fast Two-Browser Test (Auto Join Tokens)
+After deploy, generate two ready-to-open links with short-lived join tokens:
+```bash
+npm run test:links
+```
+
+Optional open both browser tabs automatically:
+```bash
+npm run test:links -- --open
+```
+
+The app also auto-issues a join token on connect if:
+- the Join Token field is empty, and
+- `INTERNAL_API_SECRET` is provided in the app.
+- `/token/issue` is enabled (`ALLOW_DEV_TOKEN_ISSUER=true`).
+
 ## Credentials Reference
 Template: `credentials.example.json`
 
@@ -148,6 +169,7 @@ Optional:
 - `npm run gh:setup`
 - `npm run build:p2p-app`
 - `npm run deploy:watch-config`
+- `npm run test:links`
 - `npm run typecheck`
 - `npm run test`
 - `npm run build`

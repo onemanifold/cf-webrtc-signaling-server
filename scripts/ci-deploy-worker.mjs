@@ -14,6 +14,9 @@ function parseCliArgs(argv) {
     cfApiToken: "",
     cfAccountId: "",
     workerName: "",
+    joinTokenSecret: "",
+    internalApiSecret: "",
+    turnSharedSecret: "",
     credentialsFile: "",
     writeCredentialsFile: "",
     nonInteractive: false,
@@ -46,6 +49,33 @@ function parseCliArgs(argv) {
         throw new Error("--worker-name expects a value");
       }
       out.workerName = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--join-token-secret") {
+      if (!next) {
+        throw new Error("--join-token-secret expects a value");
+      }
+      out.joinTokenSecret = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--internal-api-secret") {
+      if (!next) {
+        throw new Error("--internal-api-secret expects a value");
+      }
+      out.internalApiSecret = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--turn-shared-secret") {
+      if (!next) {
+        throw new Error("--turn-shared-secret expects a value");
+      }
+      out.turnSharedSecret = next.trim();
       i += 1;
       continue;
     }
@@ -431,14 +461,25 @@ function resolveConfig(credentials, cliArgs) {
       ),
     },
     secrets: {
-      JOIN_TOKEN_SECRET: pick(secrets.JOIN_TOKEN_SECRET, credentials?.JOIN_TOKEN_SECRET, process.env.JOIN_TOKEN_SECRET),
+      JOIN_TOKEN_SECRET: pick(
+        cliArgs.joinTokenSecret,
+        secrets.JOIN_TOKEN_SECRET,
+        credentials?.JOIN_TOKEN_SECRET,
+        process.env.JOIN_TOKEN_SECRET,
+      ),
       INTERNAL_API_SECRET: pick(
+        cliArgs.internalApiSecret,
         secrets.INTERNAL_API_SECRET,
         credentials?.INTERNAL_API_SECRET,
         process.env.INTERNAL_API_SECRET,
       ),
       DEV_ISSUER_SECRET: pick(secrets.DEV_ISSUER_SECRET, credentials?.DEV_ISSUER_SECRET, process.env.DEV_ISSUER_SECRET),
-      TURN_SHARED_SECRET: pick(secrets.TURN_SHARED_SECRET, credentials?.TURN_SHARED_SECRET, process.env.TURN_SHARED_SECRET),
+      TURN_SHARED_SECRET: pick(
+        cliArgs.turnSharedSecret,
+        secrets.TURN_SHARED_SECRET,
+        credentials?.TURN_SHARED_SECRET,
+        process.env.TURN_SHARED_SECRET,
+      ),
     },
   };
 }
@@ -575,25 +616,16 @@ async function main() {
     }
 
     if (!config.secrets.JOIN_TOKEN_SECRET) {
-      if (!interactive) {
-        throw new Error("Missing JOIN_TOKEN_SECRET in non-interactive mode");
-      }
       config.secrets.JOIN_TOKEN_SECRET = generateSecret();
       console.log("Generated missing JOIN_TOKEN_SECRET.");
     }
 
     if (!config.secrets.INTERNAL_API_SECRET) {
-      if (!interactive) {
-        throw new Error("Missing INTERNAL_API_SECRET in non-interactive mode");
-      }
       config.secrets.INTERNAL_API_SECRET = generateSecret();
       console.log("Generated missing INTERNAL_API_SECRET.");
     }
 
     if (config.vars.TURN_URLS && !config.secrets.TURN_SHARED_SECRET) {
-      if (!interactive) {
-        throw new Error("TURN_URLS is set but TURN_SHARED_SECRET is missing in non-interactive mode");
-      }
       config.secrets.TURN_SHARED_SECRET = generateSecret();
       console.log("Generated missing TURN_SHARED_SECRET.");
     }

@@ -41,8 +41,23 @@ const query = new URLSearchParams(window.location.search);
 const defaultWorker =
   query.get("worker")?.trim() || envDefaultWorker || "https://your-worker.workers.dev";
 const defaultRoom = query.get("room")?.trim() || roomIdInput.value || "main-room";
+const defaultUserId = query.get("userId")?.trim() || userIdInput.value || "user-1";
+const defaultAlias = query.get("alias")?.trim() || aliasInput.value || "alice";
+const defaultJoinToken = query.get("token")?.trim() || "";
+const defaultInternalSecret = query.get("internalSecret")?.trim() || "";
+const shouldAutoConnect = ["1", "true", "yes"].includes(
+  (query.get("autoconnect")?.trim().toLowerCase() ?? ""),
+);
 workerBaseUrlInput.value = defaultWorker;
 roomIdInput.value = defaultRoom;
+userIdInput.value = defaultUserId;
+aliasInput.value = defaultAlias;
+if (defaultJoinToken) {
+  joinTokenInput.value = defaultJoinToken;
+}
+if (defaultInternalSecret) {
+  internalSecretInput.value = defaultInternalSecret;
+}
 
 let signaling: Nullable<SignalingClient> = null;
 let mesh: Nullable<WebRTCMeshClient> = null;
@@ -146,7 +161,7 @@ function removeRemoteCard(peerId: string): void {
   remoteStreamByPeer.delete(peerId);
 }
 
-async function issueToken(): Promise<void> {
+async function issueTokenValue(): Promise<string> {
   const baseUrl = toHttpBase(workerBaseUrlInput.value);
   const roomId = roomIdInput.value.trim();
   const userId = userIdInput.value.trim();
@@ -177,7 +192,12 @@ async function issueToken(): Promise<void> {
   }
 
   const body = (await response.json()) as { token: string };
-  joinTokenInput.value = body.token;
+  return body.token;
+}
+
+async function issueToken(): Promise<void> {
+  const token = await issueTokenValue();
+  joinTokenInput.value = token;
   appendLog(eventLog, "Issued join token successfully.");
 }
 
@@ -273,12 +293,17 @@ async function connect(): Promise<void> {
   }
 
   const roomId = roomIdInput.value.trim();
-  const token = joinTokenInput.value.trim();
+  let token = joinTokenInput.value.trim();
   if (!roomId) {
     throw new Error("Room ID is required");
   }
+  if (!token && internalSecretInput.value.trim()) {
+    appendLog(eventLog, "Join token missing; issuing automatically with internal secret.");
+    token = await issueTokenValue();
+    joinTokenInput.value = token;
+  }
   if (!token) {
-    throw new Error("Join token is required. Use Issue Token or paste one.");
+    throw new Error("Join token is required. Paste token or provide internal secret and click Issue Token.");
   }
 
   const wsBaseUrl = toWsBase(workerBaseUrlInput.value);
@@ -427,3 +452,10 @@ roomIdInput.addEventListener("input", refreshShareLink);
 refreshShareLink();
 
 appendLog(eventLog, "App ready.");
+
+if (shouldAutoConnect) {
+  appendLog(eventLog, "Auto-connect requested by URL.");
+  Promise.resolve(connect()).catch((error) => {
+    appendLog(eventLog, `ERROR: ${(error as Error).message}`);
+  });
+}
