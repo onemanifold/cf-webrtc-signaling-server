@@ -12,6 +12,7 @@ Prerequisites:
 - Node.js 20+
 - Cloudflare account
 - Optional but recommended for one-shot GitHub publish: `gh` CLI authenticated (`gh auth login`)
+- Wrangler is managed by this repo (`wrangler@4` in devDependencies). Use local commands via `npx wrangler` or npm scripts.
 
 1. Install dependencies:
 ```bash
@@ -50,6 +51,7 @@ What the guided script does:
 Notes:
 - `deploy:guided` also supports OAuth (`wrangler login`) for local deploy.
 - Full CI/GitHub automation still needs an API token for secrets.
+- If OAuth is selected and not logged in yet, run `npx wrangler login` first.
 
 ## Manual Setup: GitHub Pages + GitHub Actions
 Use this if you want full manual control on GitHub.
