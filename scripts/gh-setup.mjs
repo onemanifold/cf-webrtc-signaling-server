@@ -13,6 +13,10 @@ const GH_ENV_OVERRIDES = {
   GH_PROMPT_DISABLED: "1",
   NO_COLOR: "1",
   CLICOLOR: "0",
+  FORCE_COLOR: "0",
+  TERM: "dumb",
+  PAGER: "cat",
+  GH_PAGER: "cat",
 };
 
 function parseCliArgs(argv) {
