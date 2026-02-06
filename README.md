@@ -41,7 +41,15 @@ What the guided script does:
 - Accepts manual secret overrides (`--join-token-secret`, `--internal-api-secret`).
 - Enables `/token/issue` by default so testing works immediately (you can disable it).
 
+## Workflow Model (Authors vs Forks)
+- This repo has no hardcoded central authority in Git; "production" is whichever remote/workflow you choose.
+- Author workflow: maintainers can use the upstream repo for both testing and production publishing by convention.
+- Consumer workflow: users fork, clone, and deploy to their own Cloudflare account + GitHub repo using `deploy:guided` (or manual setup).
+- `credentials.json` is local and gitignored, so each fork/repo can keep its own deploy credentials/state.
+
 ## Cloudflare Login + Token (Practical Path)
+`deploy:guided` now prints these exact steps and opens the token page automatically when it needs a token.
+
 1. Open `https://dash.cloudflare.com`.
 2. Sign in with GitHub (supported).
 3. Open `https://dash.cloudflare.com/profile/api-tokens`.
@@ -49,9 +57,9 @@ What the guided script does:
 5. Paste token into `deploy:guided` when prompted.
 
 Notes:
-- `deploy:guided` also supports OAuth (`wrangler login`) for local deploy.
+- `deploy:guided` supports OAuth (`wrangler login`) for local deploy and verifies it early.
 - Full CI/GitHub automation still needs an API token for secrets.
-- If OAuth is selected and not logged in yet, run `npx wrangler login` first.
+- If OAuth is selected and you are not logged in, `deploy:guided` starts `wrangler login` automatically.
 
 ## Manual Setup: GitHub Pages + GitHub Actions
 Use this if you want full manual control on GitHub.

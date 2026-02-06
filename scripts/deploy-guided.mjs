@@ -11,6 +11,8 @@ const SERVER_DIR = path.join(ROOT, "packages", "server");
 const WRANGLER_PATH = path.join(SERVER_DIR, "wrangler.toml");
 const DEFAULT_CREDENTIALS_PATH = path.join(ROOT, "credentials.json");
 const DEFAULT_GH_ENVIRONMENT = "production";
+const CLOUDFLARE_DASHBOARD_URL = "https://dash.cloudflare.com";
+const CLOUDFLARE_API_TOKENS_URL = "https://dash.cloudflare.com/profile/api-tokens";
 
 function parseCliArgs(argv) {
   const out = {
@@ -340,15 +342,31 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
-function printTokenOnboarding() {
-  output.write("\nCloudflare API token required for automated account lookup.\n");
-  output.write("1. Open: https://dash.cloudflare.com (or wrangler OAuth browser page)\n");
-  output.write("2. Sign in with GitHub on Cloudflare login\n");
-  output.write("3. Open: https://dash.cloudflare.com/profile/api-tokens\n");
-  output.write(
-    "4. Create token with Account -> Workers Scripts -> Edit (scope to your account)\n",
-  );
-  output.write("5. Copy token and paste below (it is shown once)\n\n");
+function printTokenOnboarding(reason) {
+  output.write(`\n${reason}\n`);
+  output.write("Guided token setup:\n");
+  output.write(`1. Open Cloudflare dashboard: ${CLOUDFLARE_DASHBOARD_URL}\n`);
+  output.write("2. Sign in (GitHub login is supported)\n");
+  output.write(`3. Open API Tokens: ${CLOUDFLARE_API_TOKENS_URL}\n`);
+  output.write("4. Create token with permission: Account -> Workers Scripts -> Edit\n");
+  output.write("5. Scope Account Resources to your account and create token\n");
+  output.write("6. Copy token (shown once) and paste below\n\n");
+}
+
+async function promptForApiToken(rl, reason, nonInteractive) {
+  if (nonInteractive) {
+    throw new Error(
+      `${reason} In non-interactive mode, set --cf-api-token (or CLOUDFLARE_API_TOKEN). Token page: ${CLOUDFLARE_API_TOKENS_URL}`,
+    );
+  }
+  printTokenOnboarding(reason);
+  const opened = await openBrowserUrl(CLOUDFLARE_API_TOKENS_URL);
+  if (opened) {
+    output.write(`Opened Cloudflare API tokens page: ${CLOUDFLARE_API_TOKENS_URL}\n`);
+  } else {
+    output.write(`Open this URL in your browser: ${CLOUDFLARE_API_TOKENS_URL}\n`);
+  }
+  return (await rl.question("Cloudflare API token (paste): ")).trim();
 }
 
 function normalizeSlug(input) {
@@ -813,6 +831,13 @@ async function main() {
       authMode = "oauth";
     }
 
+    if (authMode === "oauth") {
+      output.write("Checking Wrangler OAuth authentication...\n");
+      await ensureWranglerOauthAuth({ envOverrides: {}, nonInteractive });
+      output.write("Wrangler OAuth authentication verified.\n");
+      output.write("API token will only be requested if you choose GitHub automation later.\n");
+    }
+
     let accountId = "";
     let accountName = "";
     let apiToken = tokenFromArg;
@@ -820,12 +845,11 @@ async function main() {
 
     if (authMode === "api") {
       if (!apiToken) {
-        printTokenOnboarding();
-        const opened = await openBrowserUrl("https://dash.cloudflare.com");
-        if (opened) {
-          output.write("Opened Cloudflare dashboard in your browser.\n");
-        }
-        apiToken = (await rl.question("Cloudflare API token (paste): ")).trim();
+        apiToken = await promptForApiToken(
+          rl,
+          "Cloudflare API token required for API auth mode.",
+          nonInteractive,
+        );
       }
       if (!apiToken) {
         throw new Error("API token is required for API auth mode");
@@ -842,15 +866,6 @@ async function main() {
       } catch (error) {
         output.write(`Workers subdomain lookup skipped: ${formatErrorMessage(error)}\n`);
       }
-    } else {
-      accountId = (
-        await chooseText({
-          rl,
-          prompt: "Cloudflare account ID (for CI credentials, optional)",
-          defaultValue: "",
-          nonInteractive,
-        })
-      ).trim();
     }
 
     const joinTokenSecretInput = (
@@ -972,10 +987,6 @@ async function main() {
           }
         : {};
 
-    if (authMode === "oauth") {
-      await ensureWranglerOauthAuth({ envOverrides, nonInteractive });
-    }
-
     await putSecret("JOIN_TOKEN_SECRET", joinTokenSecret, envOverrides);
     await putSecret("INTERNAL_API_SECRET", internalApiSecret, envOverrides);
 
@@ -1018,27 +1029,6 @@ async function main() {
     const resolvedCredentialsPath = path.resolve(ROOT, credentialsPath);
 
     let tokenForCredentials = apiToken;
-    if (!tokenForCredentials) {
-      const shouldCaptureToken = await chooseBoolean({
-        rl,
-        prompt: "Capture Cloudflare API token for CI/GitHub deploy automation?",
-        defaultValue: true,
-        nonInteractive,
-      });
-      if (shouldCaptureToken) {
-        printTokenOnboarding();
-        const opened = await openBrowserUrl("https://dash.cloudflare.com");
-        if (opened) {
-          output.write("Opened Cloudflare dashboard in your browser.\n");
-        }
-        tokenForCredentials = (await rl.question("Cloudflare API token (paste): ")).trim();
-        if (tokenForCredentials && !accountId) {
-          const selectedAccount = await resolveAccountFromToken(tokenForCredentials, rl, nonInteractive);
-          accountId = selectedAccount.id;
-          accountName = selectedAccount.name;
-        }
-      }
-    }
 
     const shouldWriteCredentials = await chooseBoolean({
       rl,
@@ -1047,7 +1037,46 @@ async function main() {
       nonInteractive,
     });
 
-    if (shouldWriteCredentials) {
+    let effectiveShouldWriteCredentials = shouldWriteCredentials;
+    const hasGithubAutomationInputs = Boolean(tokenForCredentials && accountId);
+    const wantsGithubAutomation = await chooseBoolean({
+      rl,
+      prompt: "Run GitHub bootstrap + build + Pages/Worker publish now?",
+      defaultValue: hasGithubAutomationInputs,
+      nonInteractive,
+    });
+
+    if (wantsGithubAutomation && !tokenForCredentials) {
+      tokenForCredentials = await promptForApiToken(
+        rl,
+        "Cloudflare API token required for GitHub bootstrap (repo secrets + account lookup).",
+        nonInteractive,
+      );
+      if (!tokenForCredentials) {
+        throw new Error("Cloudflare API token is required for GitHub automation");
+      }
+    }
+
+    if (wantsGithubAutomation && tokenForCredentials && !accountId) {
+      const selectedAccount = await resolveAccountFromToken(tokenForCredentials, rl, nonInteractive);
+      accountId = selectedAccount.id;
+      accountName = selectedAccount.name;
+    }
+
+    if (wantsGithubAutomation && tokenForCredentials && accountId && !workersSubdomain) {
+      try {
+        workersSubdomain = await fetchWorkersSubdomain(accountId, tokenForCredentials);
+      } catch (error) {
+        output.write(`Workers subdomain lookup skipped: ${formatErrorMessage(error)}\n`);
+      }
+    }
+
+    if (wantsGithubAutomation && !effectiveShouldWriteCredentials) {
+      effectiveShouldWriteCredentials = true;
+      output.write("Enabled credentials.json output because GitHub automation requires it.\n");
+    }
+
+    if (effectiveShouldWriteCredentials) {
       const payload = buildCredentialsPayload({
         apiToken: tokenForCredentials,
         accountId,
@@ -1067,13 +1096,7 @@ async function main() {
       output.write(`Wrote credentials file: ${resolvedCredentialsPath}\n`);
     }
 
-    const canRunGithubAutomation = shouldWriteCredentials && tokenForCredentials && accountId;
-    const wantsGithubAutomation = await chooseBoolean({
-      rl,
-      prompt: "Run GitHub bootstrap + build + Pages/Worker publish now?",
-      defaultValue: Boolean(canRunGithubAutomation),
-      nonInteractive,
-    });
+    const canRunGithubAutomation = effectiveShouldWriteCredentials && tokenForCredentials && accountId;
 
     let targetRepo = "";
     let officialBranch = "";
@@ -1169,7 +1192,7 @@ async function main() {
         nonInteractive,
       });
 
-      if (allowDevIssuer && shouldWriteCredentials) {
+      if (allowDevIssuer && effectiveShouldWriteCredentials) {
         output.write("Generating ready-to-test browser links...\n");
         try {
           const { out } = await runCapture("node", [
