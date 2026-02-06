@@ -14,6 +14,8 @@
     "build:p2p-app": "npm run -w @cf-webrtc/p2p-test-app build",
     "deploy:guided": "node scripts/deploy-guided.mjs",
     "deploy:ci-worker": "node scripts/ci-deploy-worker.mjs",
+    "reset:guided": "node scripts/reset-guided.mjs",
+    "reset:dry-run": "node scripts/reset-guided.mjs --dry-run --non-interactive",
     "deploy:watch-config": "node scripts/watch-config-deploy.mjs",
     "gh:setup": "node scripts/gh-setup.mjs",
     "smoke:local": "node scripts/smoke-signal.mjs",

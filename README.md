@@ -47,6 +47,26 @@ What the guided script does:
 - Consumer workflow: users fork, clone, and deploy to their own Cloudflare account + GitHub repo using `deploy:guided` (or manual setup).
 - `credentials.json` is local and gitignored, so each fork/repo can keep its own deploy credentials/state.
 
+## Reset Without Deleting Repo
+- Preview reset actions:
+```bash
+npm run reset:dry-run
+```
+- Run guided reset:
+```bash
+npm run reset:guided
+```
+- Default reset now aims to restore pre-deploy state:
+  - removes local `credentials.json` + artifacts
+  - restores tracked deploy files from `HEAD`
+  - undeploys Worker
+  - tears down GitHub bootstrap state (Pages, env secret, repo vars, environment)
+  - logs out Wrangler OAuth
+- Keep reset local-only:
+```bash
+node scripts/reset-guided.mjs --local-only
+```
+
 ## Cloudflare Login + Token (Practical Path)
 `deploy:guided` now prints these exact steps and opens the token page automatically when it needs a token.
 
