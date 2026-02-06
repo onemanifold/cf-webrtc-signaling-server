@@ -96,6 +96,24 @@ Notes on keys and branches:
 - The supported secure pattern is: environment secrets + environment branch policy.
 - This repo uses environment `production` for Worker deploys, so only allowed branches can access those secrets.
 
+## Cloudflare Token Quick Path
+- Direct token page: `https://dash.cloudflare.com/profile/api-tokens`
+- Prefilled Workers-only token link: `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=%2A&zoneId=all&name=Workers%20Scripts%20Token`
+- Use `Workers Scripts:Edit` scoped to your account, then copy the token (shown once).
+
+This project uses Workers + Durable Objects; it does not require Zero Trust permissions.
+
+About credit-card prompts:
+- Workers has a Free tier and Cloudflare states “No credit card needed” for free start.
+- Billing profile/payment method is required for paid products or usage-billed flows, and Cloudflare may preauthorize cards for usage-billed services.
+
+Sources:
+- https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/#create-the-initial-api-token
+- https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/#example-create-the-token-using-a-template
+- https://www.cloudflare.com/developer-platform/products/workers/
+- https://developers.cloudflare.com/billing/create-billing-profile/
+- https://developers.cloudflare.com/billing/billing-policy/
+
 ## Static P2P Test App (GitHub Pages)
 Build output target is `apps/p2p-test/dist/index.html` (with static assets in the same `dist/` folder).
 
