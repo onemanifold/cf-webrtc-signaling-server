@@ -8,6 +8,98 @@ import { stdin as input, stdout as output } from "node:process";
 
 const ROOT = process.cwd();
 
+function parseCliArgs(argv) {
+  const out = {
+    repo: "",
+    credentialsFile: "",
+    environment: "",
+    branch: "",
+    createPrivate: "",
+    triggerWorkflows: "",
+    nonInteractive: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+
+    if (arg === "--repo") {
+      if (!next) {
+        throw new Error("--repo expects owner/repo");
+      }
+      out.repo = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--credentials-file") {
+      if (!next) {
+        throw new Error("--credentials-file expects a path");
+      }
+      out.credentialsFile = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--environment") {
+      if (!next) {
+        throw new Error("--environment expects a name");
+      }
+      out.environment = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--branch") {
+      if (!next) {
+        throw new Error("--branch expects a name");
+      }
+      out.branch = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--create-private") {
+      if (!next) {
+        throw new Error("--create-private expects true/false");
+      }
+      out.createPrivate = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--trigger-workflows") {
+      if (!next) {
+        throw new Error("--trigger-workflows expects true/false");
+      }
+      out.triggerWorkflows = next.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--non-interactive") {
+      out.nonInteractive = true;
+      continue;
+    }
+  }
+
+  return out;
+}
+
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "n"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
 async function fileExists(filePath) {
   try {
     await access(filePath);
@@ -30,22 +122,14 @@ function deriveWorkerName(repoFullName) {
   const ownerSlug = normalizeSlug(owner).slice(0, 16) || "owner";
   const repoSlug = normalizeSlug(repo).slice(0, 22) || "repo";
   const hash = createHash("sha256").update(repoFullName).digest("hex").slice(0, 8);
-  const name = `p2p-${ownerSlug}-${repoSlug}-${hash}`;
-  return name.slice(0, 63);
+  return `p2p-${ownerSlug}-${repoSlug}-${hash}`.slice(0, 63);
 }
 
-function parseYesNo(value, fallback) {
-  if (!value) {
-    return fallback;
+function buildWorkerUrl(workerName, workersSubdomain) {
+  if (workersSubdomain) {
+    return `https://${workerName}.${workersSubdomain}.workers.dev`;
   }
-  const normalized = value.trim().toLowerCase();
-  if (["y", "yes", "true", "1"].includes(normalized)) {
-    return true;
-  }
-  if (["n", "no", "false", "0"].includes(normalized)) {
-    return false;
-  }
-  return fallback;
+  return `https://${workerName}.workers.dev`;
 }
 
 async function run(command, args, options = {}) {
@@ -102,66 +186,56 @@ async function repoExists(repo) {
   }
 }
 
+async function ghApiWithJson(method, pathSpec, payload) {
+  await new Promise((resolve, reject) => {
+    const child = spawn("gh", ["api", "--method", method, pathSpec, "--input", "-"], {
+      cwd: ROOT,
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const stderr = [];
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+    child.stdin.write(JSON.stringify(payload));
+    child.stdin.end();
+
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(Buffer.concat(stderr).toString("utf8") || `gh api ${pathSpec} failed`));
+    });
+  });
+}
+
 async function ensureEnvWithBranchPolicy(repo, envName, branch) {
-  const body = JSON.stringify({
+  await ghApiWithJson("PUT", `repos/${repo}/environments/${envName}`, {
     deployment_branch_policy: {
       protected_branches: false,
       custom_branch_policies: true,
     },
   });
 
-  await new Promise((resolve, reject) => {
-    const child = spawn("gh", ["api", "--method", "PUT", `repos/${repo}/environments/${envName}`, "--input", "-"], {
-      cwd: ROOT,
-      env: { ...process.env },
-      stdio: ["pipe", "inherit", "inherit"],
+  try {
+    await ghApiWithJson("POST", `repos/${repo}/environments/${envName}/deployment-branch-policies`, {
+      name: branch,
+      type: "branch",
     });
-
-    child.stdin.write(body);
-    child.stdin.end();
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`failed to configure environment ${envName}`));
-    });
-  });
-
-  // Ensure branch policy contains the official branch.
-  const policyPayload = JSON.stringify({ name: branch, type: "branch" });
-  await new Promise((resolve, reject) => {
-    const child = spawn(
-      "gh",
-      ["api", "--method", "POST", `repos/${repo}/environments/${envName}/deployment-branch-policies`, "--input", "-"],
-      {
-        cwd: ROOT,
-        env: { ...process.env },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-
-    const stderr = [];
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.stdin.write(policyPayload);
-    child.stdin.end();
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const text = Buffer.concat(stderr).toString("utf8");
-      if (text.includes("already exists")) {
-        resolve();
-        return;
-      }
-      reject(new Error(text || `failed to set branch policy for ${branch}`));
-    });
-  });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("already exists") ||
+      message.includes("Not Found") ||
+      message.includes("404")
+    ) {
+      output.write(`Branch policy endpoint not applied (${message.trim()}). Continuing.\n`);
+      return;
+    }
+    throw error;
+  }
 }
 
 async function setSecretFromFile({ repo, envName, name, filePath }) {
@@ -203,7 +277,44 @@ function pagesUrl(repo) {
   return `https://${owner}.github.io/${name}/`;
 }
 
+async function fetchWorkersSubdomain(accountId, apiToken) {
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body?.success === false) {
+    const message =
+      Array.isArray(body?.errors) && body.errors[0]?.message ? String(body.errors[0].message) : "Unknown API error";
+    throw new Error(`Workers subdomain lookup failed (${response.status}): ${message}`);
+  }
+
+  return String(body?.result?.subdomain ?? "").trim();
+}
+
+async function chooseText({ rl, label, defaultValue, nonInteractive }) {
+  if (nonInteractive) {
+    return defaultValue;
+  }
+  const value = (await rl.question(`${label} [${defaultValue}]: `)).trim();
+  return value || defaultValue;
+}
+
+async function chooseBoolean({ rl, label, defaultValue, nonInteractive }) {
+  if (nonInteractive) {
+    return defaultValue;
+  }
+  const raw = (await rl.question(`${label} (${defaultValue ? "Y/n" : "y/N"}): `)).trim();
+  return parseBoolean(raw, defaultValue);
+}
+
 async function main() {
+  const args = parseCliArgs(process.argv.slice(2));
+  const nonInteractive = args.nonInteractive;
+
   const { out: ghUser } = await runCapture("gh", ["api", "user", "-q", ".login"]);
   const dirName = path.basename(ROOT);
   const repoSlug = normalizeSlug(dirName) || "cf-webrtc-signaling";
@@ -216,36 +327,60 @@ async function main() {
     currentRepo = "";
   }
 
-  const defaultRepo = currentRepo || `${ghUser}/${repoSlug}`;
-  const defaultEnv = process.env.GH_DEPLOY_ENV || "production";
-  const defaultBranch = "main";
+  const defaultRepo = args.repo || process.env.GH_SETUP_REPO || currentRepo || `${ghUser}/${repoSlug}`;
+  const defaultEnv = args.environment || process.env.GH_DEPLOY_ENV || process.env.GH_SETUP_ENV || "production";
+  const defaultBranch = args.branch || process.env.GH_SETUP_BRANCH || "main";
+  const defaultCredentialsFile =
+    args.credentialsFile || process.env.GH_SETUP_CREDENTIALS_FILE || "credentials.json";
+  const defaultCreatePrivate = parseBoolean(
+    args.createPrivate || process.env.GH_SETUP_CREATE_PRIVATE,
+    true,
+  );
+  const defaultTriggerWorkflows = parseBoolean(
+    args.triggerWorkflows || process.env.GH_SETUP_TRIGGER_WORKFLOWS,
+    true,
+  );
 
   const rl = readline.createInterface({ input, output });
 
   try {
     output.write("\nGitHub bootstrap for Pages + Worker deployment\n\n");
 
-    const targetRepo =
-      (await rl.question(`Target repository [${defaultRepo}]: `)).trim() || defaultRepo;
+    const targetRepo = await chooseText({
+      rl,
+      label: "Target repository",
+      defaultValue: defaultRepo,
+      nonInteractive,
+    });
 
-    const shouldCreatePrivate = parseYesNo(
-      (await rl.question("Create private repository if missing? (Y/n): ")).trim(),
-      true,
-    );
+    const shouldCreatePrivate = await chooseBoolean({
+      rl,
+      label: "Create private repository if missing?",
+      defaultValue: defaultCreatePrivate,
+      nonInteractive,
+    });
 
     const envName = defaultEnv;
-    const officialBranch =
-      (await rl.question(`Official deployment branch [${defaultBranch}]: `)).trim() || defaultBranch;
+    const officialBranch = await chooseText({
+      rl,
+      label: "Official deployment branch",
+      defaultValue: defaultBranch,
+      nonInteractive,
+    });
 
-    const credentialsFileInput =
-      (await rl.question("Credentials JSON path [credentials.json]: ")).trim() || "credentials.json";
+    const credentialsFileInput = await chooseText({
+      rl,
+      label: "Credentials JSON path",
+      defaultValue: defaultCredentialsFile,
+      nonInteractive,
+    });
     const credentialsFile = path.resolve(ROOT, credentialsFileInput);
 
     if (!(await fileExists(credentialsFile))) {
       throw new Error(`Credentials file not found: ${credentialsFile}`);
     }
 
-    let credentials = {};
+    let credentials;
     try {
       credentials = JSON.parse(await readFile(credentialsFile, "utf8"));
     } catch {
@@ -261,19 +396,59 @@ async function main() {
       await run("gh", ["repo", "create", targetRepo, "--private", "--source", ".", "--remote", "private", "--push"]);
       await run("git", ["config", "remote.pushDefault", "private"]);
       await run("git", ["config", `branch.${officialBranch}.pushRemote`, "private"]);
-      output.write(`Created private repository and set push default to remote 'private'.\n`);
+      output.write("Created private repository and set push default to remote 'private'.\n");
     }
 
-    const derivedWorkerName = deriveWorkerName(targetRepo);
-    const configuredWorkerName =
-      credentials?.cloudflare && typeof credentials.cloudflare === "object" && credentials.cloudflare.workerName
-        ? String(credentials.cloudflare.workerName)
-        : derivedWorkerName;
+    const hasWorkerName = Boolean(
+      credentials &&
+        credentials.cloudflare &&
+        typeof credentials.cloudflare === "object" &&
+        credentials.cloudflare.workerName,
+    );
 
-    // Update local credentials file with derived workerName if missing.
-    if (
-      !(credentials?.cloudflare && typeof credentials.cloudflare === "object" && credentials.cloudflare.workerName)
-    ) {
+    const configuredWorkerName = hasWorkerName
+      ? String(credentials.cloudflare.workerName)
+      : deriveWorkerName(targetRepo);
+    let configuredWorkersSubdomain =
+      credentials &&
+      credentials.cloudflare &&
+      typeof credentials.cloudflare === "object" &&
+      credentials.cloudflare.subdomain
+        ? String(credentials.cloudflare.subdomain)
+        : "";
+
+    if (!configuredWorkersSubdomain) {
+      const apiToken =
+        credentials &&
+        credentials.cloudflare &&
+        typeof credentials.cloudflare === "object" &&
+        credentials.cloudflare.apiToken
+          ? String(credentials.cloudflare.apiToken)
+          : "";
+      const accountId =
+        credentials &&
+        credentials.cloudflare &&
+        typeof credentials.cloudflare === "object" &&
+        credentials.cloudflare.accountId
+          ? String(credentials.cloudflare.accountId)
+          : "";
+
+      if (apiToken && accountId) {
+        try {
+          configuredWorkersSubdomain = await fetchWorkersSubdomain(accountId, apiToken);
+          if (configuredWorkersSubdomain) {
+            credentials.cloudflare.subdomain = configuredWorkersSubdomain;
+            await writeFile(credentialsFile, `${JSON.stringify(credentials, null, 2)}\n`, "utf8");
+            output.write(`Updated credentials file with subdomain=${configuredWorkersSubdomain}.\n`);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          output.write(`Workers subdomain lookup skipped (${message}).\n`);
+        }
+      }
+    }
+
+    if (!hasWorkerName) {
       credentials.cloudflare = {
         ...(credentials.cloudflare && typeof credentials.cloudflare === "object" ? credentials.cloudflare : {}),
         workerName: configuredWorkerName,
@@ -293,13 +468,19 @@ async function main() {
     });
     output.write(`Set environment secret CF_CREDENTIALS_JSON on ${targetRepo}/${envName}.\n`);
 
-    const workerUrl = `https://${configuredWorkerName}.workers.dev`;
+    const workerUrl = buildWorkerUrl(configuredWorkerName, configuredWorkersSubdomain);
     await setVariable({ repo: targetRepo, name: "P2P_WORKER_URL", value: workerUrl });
     await setVariable({ repo: targetRepo, name: "WORKER_NAME", value: configuredWorkerName });
 
     output.write(`Set repository variable P2P_WORKER_URL=${workerUrl}.\n`);
 
-    const runWorkflowsNow = parseYesNo((await rl.question("Trigger deploy workflows now? (Y/n): ")).trim(), true);
+    const runWorkflowsNow = await chooseBoolean({
+      rl,
+      label: "Trigger deploy workflows now?",
+      defaultValue: defaultTriggerWorkflows,
+      nonInteractive,
+    });
+
     if (runWorkflowsNow) {
       await run("gh", ["workflow", "run", "deploy-worker.yml", "--repo", targetRepo]);
       await run("gh", ["workflow", "run", "pages.yml", "--repo", targetRepo]);

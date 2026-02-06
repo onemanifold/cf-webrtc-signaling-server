@@ -1,14 +1,17 @@
-name = "cf-webrtc-signaling"
+name = "p2p-onemanifold-cf-webrtc-signaling-se-f2ad65ac"
 main = "src/index.ts"
 compatibility_date = "2025-02-01"
 workers_dev = true
+preview_urls = false
 
+account_id = "1d337c7bf4a81c3ddab30596cbb72d42"
 [vars]
 ALLOW_DEV_TOKEN_ISSUER = "false"
 TURN_TTL_SECONDS = "3600"
 TURN_RATE_LIMIT_MAX = "10"
 TURN_RATE_LIMIT_WINDOW_SEC = "60"
 
+TURN_URLS = ""
 [[durable_objects.bindings]]
 name = "SIGNALING_ROOM"
 class_name = "SignalingRoomDO"

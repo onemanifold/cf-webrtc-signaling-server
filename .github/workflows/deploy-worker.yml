@@ -32,9 +32,12 @@ jobs:
         run: npm ci
 
       - name: Materialize credentials.json from secret (optional)
-        if: ${{ secrets.CF_CREDENTIALS_JSON != '' }}
+        env:
+          CF_CREDENTIALS_JSON: ${{ secrets.CF_CREDENTIALS_JSON }}
         run: |
-          printf '%s' '${{ secrets.CF_CREDENTIALS_JSON }}' > credentials.json
+          if [ -n "$CF_CREDENTIALS_JSON" ]; then
+            printf '%s' "$CF_CREDENTIALS_JSON" > credentials.json
+          fi
 
       - name: Deploy Worker via CI hook
         env:

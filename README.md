@@ -1,285 +1,162 @@
-# Cloudflare DO WebRTC Signaling + Client SDK
+# Cloudflare Durable Object WebRTC Signaling + Client SDK
 
-This repository contains:
-- A Cloudflare Worker + Durable Objects signaling backend.
-- A reusable TypeScript client library for signaling and WebRTC mesh negotiation.
-- A static P2P test app deployable to GitHub Pages.
-- Guided deployment automation for Cloudflare.
+Monorepo:
+- `packages/server`: Cloudflare Worker + Durable Objects signaling server.
+- `packages/client`: TypeScript signaling/WebRTC client SDK.
+- `apps/p2p-test`: static Vite app for end-to-end P2P testing (`dist/index.html` build target).
 
-## Requirements Implemented
-- Browser + Node-capable signaling client.
-- Per-room alias discovery (`alias -> peerId`) for online peers.
-- Peer-ID based signaling.
-- Short-lived join token auth.
-- Trickle ICE, renegotiation, glare handling (perfect negotiation pattern).
-- App-level message IDs with ACK/retry on signaling server.
-- Session resume within TTL (default 30 seconds).
-- TURN credentials endpoint with per-user rate limiting.
-- Monorepo split (`packages/server`, `packages/client`) with tests.
+## Start Here (Fully Automated)
+Use this if you want everything ready quickly.
 
-## Repository Layout
-- `packages/server`: Worker + Durable Objects
-- `packages/client`: Signaling and WebRTC mesh SDK
-- `apps/p2p-test`: static browser test app (`dist/index.html` build target)
-- `scripts/deploy-guided.mjs`: interactive Cloudflare deploy script
-- `scripts/ci-deploy-worker.mjs`: CI deploy hook script with optional `credentials.json`
-- `scripts/gh-setup.mjs`: GitHub bootstrap script (private repo + env secrets + deploy triggers)
-- `scripts/smoke-signal.mjs`: local protocol smoke test
+Prerequisites:
+- Node.js 20+
+- Cloudflare account
+- Optional but recommended for one-shot GitHub publish: `gh` CLI authenticated (`gh auth login`)
 
-## Local Development
 1. Install dependencies:
 ```bash
 npm install
 ```
 
-2. Create local secrets for Worker development:
-```bash
-cp packages/server/.dev.vars.example packages/server/.dev.vars
-```
-Update values in `packages/server/.dev.vars`.
-
-3. Enable local token issuance (for smoke/dev):
-In `packages/server/wrangler.toml`, set:
-```toml
-ALLOW_DEV_TOKEN_ISSUER = "true"
-```
-
-4. Run Worker locally:
-```bash
-npm run -w @cf-webrtc/server dev
-```
-
-5. Run smoke test in another shell:
-```bash
-BASE_URL=http://127.0.0.1:8787 INTERNAL_API_SECRET=... npm run smoke:local
-```
-
-## Guided Deployment
-Run:
+2. Run guided bootstrap:
 ```bash
 npm run deploy:guided
 ```
 
-Or pass token directly:
+3. Optional (skip token prompt):
 ```bash
 node scripts/deploy-guided.mjs --cf-api-token <CLOUDFLARE_API_TOKEN>
 ```
 
-The script asks for:
-- Cloudflare auth mode: API token (recommended) or OAuth.
-- Worker name and runtime vars.
-- Secrets (`JOIN_TOKEN_SECRET`, `INTERNAL_API_SECRET`, optional TURN/dev issuer secrets).
+What the guided script does:
+- Deploys Worker + Durable Objects.
+- Verifies Worker health at `https://<worker>.<subdomain>.workers.dev/health`.
+- Writes local `credentials.json` (gitignored).
+- Optionally bootstraps GitHub repo/environment/secrets/variables.
+- Builds the Vite P2P app.
+- Optionally triggers and waits for Worker + Pages workflows.
+- Verifies GitHub Pages URL and prints share/invite links.
 
-If no token is provided, it prints direct instructions and waits for paste input.
-With token mode, account ID is auto-resolved from the token (with manual fallback only if lookup fails).
+## Cloudflare Login + Token (Practical Path)
+1. Open `https://dash.cloudflare.com`.
+2. Sign in with GitHub (supported).
+3. Open `https://dash.cloudflare.com/profile/api-tokens`.
+4. Create token with permission: `Account -> Workers Scripts -> Edit`.
+5. Paste token into `deploy:guided` when prompted.
 
-Then it:
-- Updates `packages/server/wrangler.toml`.
-- Uploads secrets using `wrangler secret put`.
-- Deploys with `wrangler deploy`.
+Notes:
+- `deploy:guided` also supports OAuth (`wrangler login`) for local deploy.
+- Full CI/GitHub automation still needs an API token for secrets.
 
-## GitHub Bootstrap (Public Clone -> Private Deploy)
-Yes, a public repository can be cloned and then published as a private repository under your account.
+## Manual Setup: GitHub Pages + GitHub Actions
+Use this if you want full manual control on GitHub.
 
-Run:
+1. Copy credentials template and fill values:
 ```bash
-npm run gh:setup
+cp credentials.example.json credentials.json
 ```
 
-What this script does with `gh`:
-- Optionally creates a private GitHub repository from your local clone.
-- Sets push defaults so you push to your private remote.
-- Configures GitHub Actions environment `production`.
-- Restricts that environment to the official branch (`main` by default).
-- Uploads `credentials.json` as environment secret `CF_CREDENTIALS_JSON`.
-- Sets repository variables (including `P2P_WORKER_URL`).
-- Optionally triggers `deploy-worker.yml` and `pages.yml`.
-
-Requirements before running:
-- `gh` authenticated (`gh auth login`).
-- Local `credentials.json` present (gitignored).
-
-Notes on keys and branches:
-- GitHub secrets are not directly branch-scoped.
-- The supported secure pattern is: environment secrets + environment branch policy.
-- This repo uses environment `production` for Worker deploys, so only allowed branches can access those secrets.
-
-## Cloudflare Token Quick Path
-- Direct token page: `https://dash.cloudflare.com/profile/api-tokens`
-- Prefilled Workers-only token link: `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=%2A&zoneId=all&name=Workers%20Scripts%20Token`
-- Use `Workers Scripts:Edit` scoped to your account, then copy the token (shown once).
-
-This project uses Workers + Durable Objects; it does not require Zero Trust permissions.
-
-About credit-card prompts:
-- Workers has a Free tier and Cloudflare states “No credit card needed” for free start.
-- Billing profile/payment method is required for paid products or usage-billed flows, and Cloudflare may preauthorize cards for usage-billed services.
-
-Sources:
-- https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/#create-the-initial-api-token
-- https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/#example-create-the-token-using-a-template
-- https://www.cloudflare.com/developer-platform/products/workers/
-- https://developers.cloudflare.com/billing/create-billing-profile/
-- https://developers.cloudflare.com/billing/billing-policy/
-
-## Static P2P Test App (GitHub Pages)
-Build output target is `apps/p2p-test/dist/index.html` (with static assets in the same `dist/` folder).
-
-Build locally:
-```bash
-npm run build:p2p-app
-```
-
-Preview locally:
-```bash
-npm run -w @cf-webrtc/p2p-test preview
-```
-
-The app lets you:
-- Issue dev join tokens (`/token/issue`)
-- Connect to room signaling
-- Claim/resolve alias in-room
-- Start camera/microphone
-- Exchange chat messages over RTC data channels
-
-GitHub Pages deployment hook:
-- Workflow: `.github/workflows/pages.yml`
-- Trigger: push to `main` touching app/client files (or manual dispatch)
-- Optional repo variable: `P2P_WORKER_URL` (sets default Worker URL in the hosted app)
-
-### What link do peers share?
-Use the GitHub Pages URL. Recommended format:
-`https://<github-user>.github.io/<repo>/?worker=https://<worker>.workers.dev&room=<room-id>`
-
-The app includes a **Copy Share Link** button that generates this URL from the current form values.
-
-## Cloudflare Deploy Hook (GitHub Actions)
-Worker deployment hook:
-- Workflow: `.github/workflows/deploy-worker.yml`
-- Trigger: push to `main` touching server/deploy files (or manual dispatch)
-
-It runs:
+2. Deploy Worker locally once (now supports token prompt, account auto-detect, secret generation fallback):
 ```bash
 npm run deploy:ci-worker
 ```
 
-Environment used by workflow:
-- `production` (configure secrets/variables there when using protected deployment secrets)
+3. Create a GitHub environment named `production`.
 
-### Credentials resolution order
-`scripts/ci-deploy-worker.mjs` uses:
-1. `credentials.json` (if present at repo root, or path in `CF_CREDENTIALS_FILE`)
-2. GitHub Action env/secrets fallback
+4. Add environment secret `CF_CREDENTIALS_JSON` with the full `credentials.json` contents.
 
-If `credentials.json` exists, it overrides env values for keys it contains.
-
-### Auto deploy on local config change (gitignored file)
-Yes, this is possible locally even if `credentials.json` is gitignored.
-
-Run:
-```bash
-npm run deploy:watch-config
+5. Add repository variable `P2P_WORKER_URL` set to:
+```text
+https://<worker-name>.<subdomain>.workers.dev
 ```
 
+6. Push to `main` and run workflows:
+- `.github/workflows/deploy-worker.yml`
+- `.github/workflows/pages.yml`
+
+7. Share:
+```text
+https://<github-user>.github.io/<repo>/?worker=https://<worker-name>.<subdomain>.workers.dev&room=<room-id>
+```
+
+## Manual Setup: Any Git Provider + Any Static Host
+This stack is provider-agnostic.
+
+1. Deploy Worker from CI/CD or local shell (same seamless Cloudflare flow):
+```bash
+node scripts/ci-deploy-worker.mjs
+```
 Behavior:
-- Watches `credentials.json`
-- On create/update, runs `scripts/ci-deploy-worker.mjs`
-- Deploys Worker automatically with your local credentials
+- Uses `credentials.json` when present.
+- Otherwise uses env/CLI values.
+- If token exists but account ID is missing, it auto-resolves account from Cloudflare API.
+- In interactive local mode, if required values are missing it prompts and can generate secrets.
+- In non-interactive CI mode, it fails fast with exact missing variables.
 
-Note:
-- A gitignored file cannot trigger push-based GitHub Actions by itself.
-- This watcher gives you the same “change config -> auto deploy” flow on your machine.
-
-### Pushing only to your own fork remote
-If you keep an `upstream` remote, set your fork as default push target:
+Useful non-interactive flags:
 ```bash
-git config remote.pushDefault origin
-git config branch.main.pushRemote origin
+node scripts/ci-deploy-worker.mjs \
+  --cf-api-token <TOKEN> \
+  --cf-account-id <ACCOUNT_ID> \
+  --worker-name <WORKER_NAME> \
+  --non-interactive
 ```
 
-Optional hard block on upstream pushes:
+2. Build static app:
 ```bash
-git remote set-url --push upstream DISABLED
+npm run build:p2p-app
 ```
 
-Example format:
-```json
-{
-  "cloudflare": {
-    "apiToken": "CF_API_TOKEN",
-    "accountId": "CF_ACCOUNT_ID",
-    "workerName": "cf-webrtc-signaling"
-  },
-  "vars": {
-    "ALLOW_DEV_TOKEN_ISSUER": "false",
-    "TURN_URLS": "turn:turn.example.com:3478?transport=udp",
-    "TURN_TTL_SECONDS": "3600",
-    "TURN_RATE_LIMIT_MAX": "10",
-    "TURN_RATE_LIMIT_WINDOW_SEC": "60"
-  },
-  "secrets": {
-    "JOIN_TOKEN_SECRET": "required",
-    "INTERNAL_API_SECRET": "required",
-    "DEV_ISSUER_SECRET": "optional",
-    "TURN_SHARED_SECRET": "optional"
-  }
-}
+3. Publish `apps/p2p-test/dist/` to any static host (S3+CloudFront, Netlify, Vercel static, Nginx, etc).
+
+4. Configure Worker URL in one of two ways:
+- Build-time env for Vite: `VITE_DEFAULT_WORKER_URL=https://<worker>.<subdomain>.workers.dev`
+- Runtime query param: `?worker=https://<worker>.<subdomain>.workers.dev&room=<room-id>`
+
+## Vite-Only Local Test Option
+No custom backend is required for the app itself (it is static).
+
+Run local app dev server:
+```bash
+npm run -w @cf-webrtc/p2p-test-app dev
 ```
 
-Also provided: `credentials.example.json`.
-
-## Protocol Summary
-### WebSocket endpoint
-- `wss://<worker>/ws/:roomId?token=<joinToken>[&resumeToken=<token>]`
-
-### Client -> Server
-- `discovery.claim` `{ name }`
-- `discovery.resolve` `{ name }`
-- `signal.send` `{ toPeerId, payload, deliveryId? }`
-- `signal.ack` `{ deliveryId, toPeerId }`
-- `heartbeat.ping` `{ ts }`
-
-### Server -> Client
-- `session.welcome`
-- `presence.joined`, `presence.left`
-- `discovery.claimed`, `discovery.resolved`
-- `signal.message`, `signal.acked`
-- `heartbeat.pong`, `error`
-
-## Client SDK Usage
-```ts
-import { SignalingClient, WebRTCMeshClient } from "@cf-webrtc/client";
-
-const signaling = new SignalingClient({
-  wsBaseUrl: "wss://your-worker.workers.dev/ws",
-  httpBaseUrl: "https://your-worker.workers.dev",
-  roomId: "room-1",
-  alias: "alice",
-  getJoinToken: async () => fetch("/api/join-token").then((r) => r.text()),
-});
-
-await signaling.connect();
-
-const mesh = new WebRTCMeshClient({
-  signaling,
-  autoCreateDataChannel: true,
-});
-
-await mesh.start();
+Or preview production build:
+```bash
+npm run -w @cf-webrtc/p2p-test-app preview
 ```
 
-## Scripts
+Then point the app to your deployed Worker URL.
+
+## Credentials Reference
+Template: `credentials.example.json`
+
+Required:
+- `cloudflare.apiToken`
+- `cloudflare.accountId`
+- `cloudflare.workerName`
+- `secrets.JOIN_TOKEN_SECRET`
+- `secrets.INTERNAL_API_SECRET`
+
+Optional:
+- TURN: `vars.TURN_URLS`, `secrets.TURN_SHARED_SECRET`
+- Dev token issuer: `vars.ALLOW_DEV_TOKEN_ISSUER`, `secrets.DEV_ISSUER_SECRET`
+
+## Key Scripts
+- `npm run deploy:guided`
+- `npm run deploy:ci-worker`
+- `npm run gh:setup`
+- `npm run build:p2p-app`
+- `npm run deploy:watch-config`
 - `npm run typecheck`
 - `npm run test`
 - `npm run build`
-- `npm run build:p2p-app`
-- `npm run gh:setup`
-- `npm run deploy:guided`
-- `npm run deploy:ci-worker`
-- `npm run deploy:watch-config`
-- `npm run smoke:local`
 
-## Security Notes
-- `/token/issue` is for development/integration and guarded by `INTERNAL_API_SECRET` + `ALLOW_DEV_TOKEN_ISSUER`.
-- In production, issue join tokens from your trusted backend.
-- Do not expose `INTERNAL_API_SECRET`, `JOIN_TOKEN_SECRET`, or TURN shared secret to clients.
+## Security
+- `credentials.json` is local-only and gitignored.
+- Never expose `JOIN_TOKEN_SECRET`, `INTERNAL_API_SECRET`, `TURN_SHARED_SECRET` to clients.
+- `/token/issue` is dev-only and controlled by `ALLOW_DEV_TOKEN_ISSUER`.
+
+## Billing Note
+Workers has a free tier and does not require Zero Trust for this project.
+If you are prompted for billing details, that is usually tied to usage-billed features beyond this minimal setup.
