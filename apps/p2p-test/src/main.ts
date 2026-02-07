@@ -383,25 +383,31 @@ async function connect(): Promise<void> {
         wsDialAttempt += 1;
         const attempt = wsDialAttempt;
         const startedAt = Date.now();
-        appendLog(eventLog, `WS dialing attempt=${attempt} ${redactWsUrl(url)}`);
-        const socket = new WebSocket(url);
+        const trace = `a${attempt}-${crypto.randomUUID().slice(0, 8)}`;
+        const tracedUrl = new URL(url);
+        tracedUrl.searchParams.set("trace", trace);
+        appendLog(eventLog, `WS dialing attempt=${attempt} trace=${trace} ${redactWsUrl(tracedUrl.toString())}`);
+        const socket = new WebSocket(tracedUrl.toString());
         const probe = window.setTimeout(() => {
-          appendLog(eventLog, `WS still connecting attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
+          appendLog(
+            eventLog,
+            `WS still connecting attempt=${attempt} trace=${trace} elapsed=${Date.now() - startedAt}ms`,
+          );
         }, 5_000);
         const clearProbe = () => window.clearTimeout(probe);
         socket.addEventListener("open", () => {
           clearProbe();
-          appendLog(eventLog, `WS transport open attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
+          appendLog(eventLog, `WS transport open attempt=${attempt} trace=${trace} elapsed=${Date.now() - startedAt}ms`);
         });
         socket.addEventListener("close", (event) => {
           clearProbe();
           appendLog(
             eventLog,
-            `WS transport close attempt=${attempt} elapsed=${Date.now() - startedAt}ms code=${event.code} reason=${event.reason}`,
+            `WS transport close attempt=${attempt} trace=${trace} elapsed=${Date.now() - startedAt}ms code=${event.code} reason=${event.reason}`,
           );
         });
         socket.addEventListener("error", () => {
-          appendLog(eventLog, `WS transport error attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
+          appendLog(eventLog, `WS transport error attempt=${attempt} trace=${trace} elapsed=${Date.now() - startedAt}ms`);
         });
         return socket;
       },

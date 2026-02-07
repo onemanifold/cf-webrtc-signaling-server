@@ -23,12 +23,32 @@ interface DevIssueTokenRequest {
   ttlSeconds?: number;
 }
 
+interface WsDebugEvent {
+  ts: number;
+  phase: string;
+  roomId: string | null;
+  trace: string | null;
+  ua: string;
+  origin: string;
+  upgrade: string;
+  hasWsKey: boolean;
+  hasWsVersion: boolean;
+  cfRay: string;
+  httpProtocol: string;
+  detail?: string;
+  status?: number;
+  hasWebSocket?: boolean;
+}
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "content-type,authorization,x-internal-secret,x-dev-issuer-secret",
 };
+
+const WS_DEBUG_MAX = 240;
+const wsDebugEvents: WsDebugEvent[] = [];
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -108,6 +128,36 @@ function parseCommaList(input: string | undefined): string[] {
     .filter((item) => item.length > 0);
 }
 
+function getHttpProtocol(request: Request): string {
+  const cf = (request as unknown as { cf?: Record<string, unknown> }).cf;
+  const value = cf && typeof cf.httpProtocol === "string" ? cf.httpProtocol : "";
+  return value || "unknown";
+}
+
+function pushWsDebug(event: Omit<WsDebugEvent, "ts">): void {
+  wsDebugEvents.push({
+    ts: Date.now(),
+    ...event,
+  });
+  if (wsDebugEvents.length > WS_DEBUG_MAX) {
+    wsDebugEvents.splice(0, wsDebugEvents.length - WS_DEBUG_MAX);
+  }
+}
+
+function isDebugAuthorized(request: Request, env: Env): boolean {
+  const provided =
+    request.headers.get("x-dev-issuer-secret") ??
+    request.headers.get("x-internal-secret") ??
+    new URL(request.url).searchParams.get("secret");
+  if (!provided) {
+    return false;
+  }
+  const valid = [env.DEV_ISSUER_SECRET, env.INTERNAL_API_SECRET].filter(
+    (candidate): candidate is string => Boolean(candidate && candidate.length > 0),
+  );
+  return valid.includes(provided);
+}
+
 async function checkTurnRateLimit(env: Env, userId: string): Promise<RateLimitResponse> {
   const max = Math.max(1, Math.floor(toNumber(env.TURN_RATE_LIMIT_MAX, 10)));
   const windowSec = Math.max(1, Math.floor(toNumber(env.TURN_RATE_LIMIT_WINDOW_SEC, 60)));
@@ -176,6 +226,25 @@ export default {
 
     if (url.pathname === "/health") {
       return jsonResponse({ ok: true, now: Date.now() });
+    }
+
+    if (url.pathname === "/debug/ws-recent" && request.method === "GET") {
+      if (!toBoolean(env.ALLOW_DEV_TOKEN_ISSUER, false)) {
+        return jsonError("DEV_ISSUER_DISABLED", "Debug endpoint disabled", 403);
+      }
+      if (!isDebugAuthorized(request, env)) {
+        return jsonError("FORBIDDEN", "Missing or invalid debug secret", 403);
+      }
+      const roomFilter = url.searchParams.get("roomId");
+      const limitRaw = Number(url.searchParams.get("limit") ?? "80");
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 80;
+      const filtered = roomFilter ? wsDebugEvents.filter((event) => event.roomId === roomFilter) : wsDebugEvents;
+      const events = filtered.slice(-limit);
+      return jsonResponse({
+        count: events.length,
+        roomId: roomFilter ?? null,
+        events,
+      });
     }
 
     if (url.pathname === "/token/issue" && request.method === "POST") {
@@ -280,9 +349,40 @@ export default {
     }
 
     const roomId = extractRoomIdFromPath(url.pathname);
+    const trace = url.searchParams.get("trace") || url.searchParams.get("clientTrace") || null;
+    const wsMeta = {
+      roomId,
+      trace,
+      ua: request.headers.get("user-agent") ?? "",
+      origin: request.headers.get("origin") ?? "",
+      upgrade: request.headers.get("upgrade") ?? "",
+      hasWsKey: request.headers.has("sec-websocket-key") || request.headers.has("Sec-WebSocket-Key"),
+      hasWsVersion: request.headers.has("sec-websocket-version") || request.headers.has("Sec-WebSocket-Version"),
+      cfRay: request.headers.get("cf-ray") ?? "",
+      httpProtocol: getHttpProtocol(request),
+    };
+
+    if (roomId && !isWebSocketHandshakeRequest(request)) {
+      pushWsDebug({
+        ...wsMeta,
+        phase: "edge_non_ws_room_route",
+        detail: "room route requested without websocket handshake headers",
+      });
+      return jsonError("EXPECTED_WEBSOCKET", "Expected websocket upgrade", 426);
+    }
+
     if (roomId && isWebSocketHandshakeRequest(request)) {
+      pushWsDebug({
+        ...wsMeta,
+        phase: "edge_ws_request",
+      });
+
       const token = parseTokenFromRequest(request, url);
       if (!token) {
+        pushWsDebug({
+          ...wsMeta,
+          phase: "edge_ws_reject_missing_token",
+        });
         return jsonError("UNAUTHORIZED", "Missing token for websocket", 401);
       }
 
@@ -290,6 +390,11 @@ export default {
       try {
         payload = await verifyJoinToken(token, env.JOIN_TOKEN_SECRET, { expectedRoom: roomId });
       } catch (error) {
+        pushWsDebug({
+          ...wsMeta,
+          phase: "edge_ws_reject_bad_token",
+          detail: String((error as Error).message),
+        });
         return jsonError("UNAUTHORIZED", String((error as Error).message), 401);
       }
 
@@ -306,7 +411,17 @@ export default {
         headers,
       });
 
+      pushWsDebug({
+        ...wsMeta,
+        phase: "edge_ws_forward_to_do",
+      });
       const response = await roomStub.fetch(doRequest);
+      pushWsDebug({
+        ...wsMeta,
+        phase: "edge_ws_response_from_do",
+        status: response.status,
+        hasWebSocket: Boolean(response.webSocket),
+      });
       // For websocket upgrades, return DO response as-is. Re-wrapping 101 responses can
       // cause client-side transport instability in some browsers.
       return response;
