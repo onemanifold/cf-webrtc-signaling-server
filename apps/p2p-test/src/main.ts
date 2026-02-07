@@ -192,6 +192,34 @@ function toWsBase(base: string): string {
   throw new Error("Worker Base URL must start with http(s):// or ws(s)://");
 }
 
+async function probeWsHttpPath(httpBaseUrl: string, roomId: string, token: string): Promise<void> {
+  const trace = `http-probe-${crypto.randomUUID().slice(0, 8)}`;
+  const probeUrl = `${httpBaseUrl}/ws/${encodeURIComponent(roomId)}?token=${encodeURIComponent(token)}&trace=${trace}`;
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const response = await fetch(probeUrl, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const body = (await response.text()).slice(0, 180).replace(/\s+/g, " ").trim();
+    appendLog(
+      eventLog,
+      `WS HTTP probe trace=${trace} status=${response.status} elapsed=${Date.now() - startedAt}ms body=${body || "<empty>"}`,
+    );
+  } catch (error) {
+    appendLog(
+      eventLog,
+      `WS HTTP probe trace=${trace} failed elapsed=${Date.now() - startedAt}ms error=${(error as Error).message}`,
+    );
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 function setConnectedUiState(connected: boolean): void {
   connectBtn.disabled = connected || isConnecting;
   disconnectBtn.disabled = !connected;
@@ -445,6 +473,7 @@ async function connect(): Promise<void> {
     const wsBaseUrl = toWsBase(workerBaseUrlInput.value);
     const httpBaseUrl = toHttpBase(workerBaseUrlInput.value);
     appendLog(eventLog, `Transport config wsBaseUrl=${wsBaseUrl} httpBaseUrl=${httpBaseUrl}`);
+    await probeWsHttpPath(httpBaseUrl, roomId, token);
 
     const client = new SignalingClient({
       wsBaseUrl,
