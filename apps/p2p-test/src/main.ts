@@ -72,6 +72,33 @@ function appendLog(element: HTMLPreElement, message: string): void {
   element.textContent = `${next}\n${element.textContent ?? ""}`.slice(0, 12_000);
 }
 
+function tokenFingerprint(token: string): string {
+  if (!token) {
+    return "none";
+  }
+  if (token.length <= 18) {
+    return token;
+  }
+  return `${token.slice(0, 12)}...${token.slice(-6)}`;
+}
+
+function redactWsUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const token = parsed.searchParams.get("token");
+    if (token) {
+      parsed.searchParams.set("token", tokenFingerprint(token));
+    }
+    const resumeToken = parsed.searchParams.get("resumeToken");
+    if (resumeToken) {
+      parsed.searchParams.set("resumeToken", tokenFingerprint(resumeToken));
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function toHttpBase(base: string): string {
   return base.trim().replace(/\/+$/, "");
 }
@@ -335,9 +362,14 @@ async function connect(): Promise<void> {
     if (!token) {
       throw new Error("Join token is required. Paste a token or click Issue Token.");
     }
+    appendLog(
+      eventLog,
+      `Connect start room=${roomId} userId=${userIdInput.value.trim()} alias=${aliasInput.value.trim() || "none"} token=${tokenFingerprint(token)}`,
+    );
 
     const wsBaseUrl = toWsBase(workerBaseUrlInput.value);
     const httpBaseUrl = toHttpBase(workerBaseUrlInput.value);
+    appendLog(eventLog, `Transport config wsBaseUrl=${wsBaseUrl} httpBaseUrl=${httpBaseUrl}`);
 
     const client = new SignalingClient({
       wsBaseUrl,
@@ -345,6 +377,20 @@ async function connect(): Promise<void> {
       roomId,
       alias: aliasInput.value.trim() || undefined,
       getJoinToken: async () => joinTokenInput.value.trim(),
+      webSocketFactory: (url) => {
+        appendLog(eventLog, `WS dialing ${redactWsUrl(url)}`);
+        const socket = new WebSocket(url);
+        socket.addEventListener("open", () => {
+          appendLog(eventLog, "WS transport open");
+        });
+        socket.addEventListener("close", (event) => {
+          appendLog(eventLog, `WS transport close code=${event.code} reason=${event.reason}`);
+        });
+        socket.addEventListener("error", () => {
+          appendLog(eventLog, "WS transport error");
+        });
+        return socket;
+      },
     });
 
     bindSignalingEvents(client);
@@ -393,6 +439,7 @@ async function connect(): Promise<void> {
 
     try {
       await withTimeout(meshClient.start(), 15_000, "Signaling connection");
+      appendLog(eventLog, "Signaling session established.");
     } catch (error) {
       const message = (error as Error).message ?? String(error);
       if (message.includes("before session established (1006)")) {
