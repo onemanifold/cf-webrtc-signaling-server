@@ -10,6 +10,7 @@ interface PeerLink {
   ignoreOffer: boolean;
   isSettingRemoteAnswerPending: boolean;
   dataChannels: Set<RTCDataChannel>;
+  pendingRemoteCandidates: Array<RTCIceCandidateInit | null>;
 }
 
 interface LocalTrackBinding {
@@ -192,6 +193,7 @@ export class WebRTCMeshClient {
       ignoreOffer: false,
       isSettingRemoteAnswerPending: false,
       dataChannels: new Set<RTCDataChannel>(),
+      pendingRemoteCandidates: [],
     };
 
     pc.onicecandidate = (event) => {
@@ -294,6 +296,7 @@ export class WebRTCMeshClient {
 
         try {
           await link.pc.setRemoteDescription(description);
+          await this.flushPendingRemoteCandidates(link);
         } finally {
           link.isSettingRemoteAnswerPending = false;
         }
@@ -319,7 +322,14 @@ export class WebRTCMeshClient {
         return;
       }
       case "ice": {
+        if (link.ignoreOffer) {
+          return;
+        }
         const candidate = (message.payload.candidate ?? null) as RTCIceCandidateInit | null;
+        if (!link.pc.remoteDescription) {
+          link.pendingRemoteCandidates.push(candidate);
+          return;
+        }
         try {
           await link.pc.addIceCandidate(candidate);
         } catch (error) {
@@ -350,6 +360,23 @@ export class WebRTCMeshClient {
       channel.close();
     }
     this.peers.delete(peerId);
+  }
+
+  private async flushPendingRemoteCandidates(link: PeerLink): Promise<void> {
+    if (!link.pc.remoteDescription || link.pendingRemoteCandidates.length === 0) {
+      return;
+    }
+
+    const pending = link.pendingRemoteCandidates.splice(0, link.pendingRemoteCandidates.length);
+    for (const candidate of pending) {
+      try {
+        await link.pc.addIceCandidate(candidate);
+      } catch (error) {
+        if (!link.ignoreOffer) {
+          this.events.emit("error", error as Error);
+        }
+      }
+    }
   }
 
   private shouldInitiate(remotePeerId: string): boolean {
