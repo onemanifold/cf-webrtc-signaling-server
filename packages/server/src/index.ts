@@ -1,4 +1,4 @@
-import { hmacSha1Base64 } from "./crypto-utils";
+import { fromBase64Url, hmacSha1Base64 } from "./crypto-utils";
 import { signJoinToken, parseBearerToken, verifyJoinToken } from "./join-token";
 import { RateLimitDO } from "./do/rate-limit-do";
 import { SignalingRoomDO } from "./do/signaling-room-do";
@@ -93,6 +93,19 @@ function parseTokenFromRequest(request: Request, url: URL): string | null {
     return bearer;
   }
   return url.searchParams.get("token");
+}
+
+function parseTokenExpUnsafe(token: string): number | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+      return null;
+    }
+    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[1]))) as { exp?: unknown };
+    return typeof payload.exp === "number" ? payload.exp : null;
+  } catch {
+    return null;
+  }
 }
 
 function extractRoomIdFromPath(pathname: string): string | null {
@@ -390,12 +403,19 @@ export default {
       try {
         payload = await verifyJoinToken(token, env.JOIN_TOKEN_SECRET, { expectedRoom: roomId });
       } catch (error) {
+        const now = Math.floor(Date.now() / 1_000);
+        const exp = parseTokenExpUnsafe(token);
+        const message = String((error as Error).message);
+        const detail =
+          message === "Token expired"
+            ? `${message} now=${now} exp=${exp ?? "unknown"} skew=${exp !== null ? now - exp : "unknown"}`
+            : message;
         pushWsDebug({
           ...wsMeta,
           phase: "edge_ws_reject_bad_token",
-          detail: String((error as Error).message),
+          detail,
         });
-        return jsonError("UNAUTHORIZED", String((error as Error).message), 401);
+        return jsonError("UNAUTHORIZED", message, 401);
       }
 
       const roomStub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName(roomId));

@@ -65,6 +65,7 @@ let mesh: Nullable<WebRTCMeshClient> = null;
 let localStream: Nullable<MediaStream> = null;
 let isConnecting = false;
 let wsDialAttempt = 0;
+let tokenRefreshCount = 0;
 const peers = new Map<string, PeerSummary>();
 const remoteStreamByPeer = new Map<string, MediaStream>();
 
@@ -81,6 +82,79 @@ function tokenFingerprint(token: string): string {
     return token;
   }
   return `${token.slice(0, 12)}...${token.slice(-6)}`;
+}
+
+interface DecodedJoinTokenPayload {
+  sub?: string;
+  room?: string;
+  name?: string;
+  exp?: number;
+  iat?: number;
+}
+
+function decodeJoinTokenPayload(token: string): DecodedJoinTokenPayload | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+      return null;
+    }
+    const payloadBase64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadBase64.padEnd(Math.ceil(payloadBase64.length / 4) * 4, "=");
+    const decoded = atob(padded);
+    const json = JSON.parse(decoded) as DecodedJoinTokenPayload;
+    return json;
+  } catch {
+    return null;
+  }
+}
+
+function tokenRemainingSeconds(token: string): number | null {
+  const payload = decodeJoinTokenPayload(token);
+  if (!payload || typeof payload.exp !== "number") {
+    return null;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  return payload.exp - now;
+}
+
+async function ensureJoinToken(options: {
+  forceRefresh?: boolean;
+  minRemainingSec?: number;
+  reason: string;
+}): Promise<string> {
+  const forceRefresh = options.forceRefresh ?? false;
+  const minRemainingSec = options.minRemainingSec ?? 45;
+
+  let token = joinTokenInput.value.trim();
+  let mustIssue = forceRefresh || !token;
+  const remaining = token ? tokenRemainingSeconds(token) : null;
+
+  if (!mustIssue && remaining !== null && remaining <= minRemainingSec) {
+    mustIssue = true;
+  }
+
+  if (!mustIssue && token && remaining === null) {
+    appendLog(eventLog, `Join token check reason=${options.reason} result=keep-unparsable token=${tokenFingerprint(token)}`);
+    return token;
+  }
+
+  if (!mustIssue && token && remaining !== null) {
+    appendLog(
+      eventLog,
+      `Join token check reason=${options.reason} result=reuse remaining=${remaining}s token=${tokenFingerprint(token)}`,
+    );
+    return token;
+  }
+
+  token = await issueTokenValue();
+  joinTokenInput.value = token;
+  tokenRefreshCount += 1;
+  const nextRemaining = tokenRemainingSeconds(token);
+  appendLog(
+    eventLog,
+    `Join token refresh #${tokenRefreshCount} reason=${options.reason} remaining=${nextRemaining ?? "unknown"}s token=${tokenFingerprint(token)}`,
+  );
+  return token;
 }
 
 function redactWsUrl(url: string): string {
@@ -248,8 +322,10 @@ async function issueTokenValue(): Promise<string> {
 }
 
 async function issueToken(): Promise<void> {
-  const token = await issueTokenValue();
-  joinTokenInput.value = token;
+  await ensureJoinToken({
+    forceRefresh: true,
+    reason: "manual-issue-button",
+  });
   appendLog(eventLog, "Issued join token successfully.");
 }
 
@@ -351,15 +427,13 @@ async function connect(): Promise<void> {
 
   try {
     const roomId = roomIdInput.value.trim();
-    let token = joinTokenInput.value.trim();
     if (!roomId) {
       throw new Error("Room ID is required");
     }
-    if (!token) {
-      appendLog(eventLog, "Join token missing; issuing automatically from /token/issue.");
-      token = await issueTokenValue();
-      joinTokenInput.value = token;
-    }
+    let token = await ensureJoinToken({
+      reason: "connect-start",
+      minRemainingSec: 60,
+    });
     if (!token) {
       throw new Error("Join token is required. Paste a token or click Issue Token.");
     }
@@ -377,7 +451,11 @@ async function connect(): Promise<void> {
       httpBaseUrl,
       roomId,
       alias: aliasInput.value.trim() || undefined,
-      getJoinToken: async () => joinTokenInput.value.trim(),
+      getJoinToken: async () =>
+        ensureJoinToken({
+          reason: "ws-open",
+          minRemainingSec: 45,
+        }),
       handshakeTimeoutMs: 20_000,
       webSocketFactory: (url) => {
         wsDialAttempt += 1;
@@ -429,8 +507,11 @@ async function connect(): Promise<void> {
       const message = (error as Error).message ?? String(error);
       if (message.includes("(401)")) {
         appendLog(eventLog, "Join token rejected (401); issuing a fresh token and retrying once.");
-        token = await issueTokenValue();
-        joinTokenInput.value = token;
+        token = await ensureJoinToken({
+          forceRefresh: true,
+          reason: "turn-401-retry",
+          minRemainingSec: 60,
+        });
         try {
           const turn = await client.fetchTurnCredentials();
           rtcConfiguration = {
