@@ -14,6 +14,25 @@ const RESUME_TTL_MS = 30_000;
 const DELIVERY_RETRY_INTERVAL_MS = 1_500;
 const DELIVERY_MAX_ATTEMPTS = 12;
 const DELIVERY_MAX_AGE_MS = 90_000;
+const DEBUG_EVENTS_KEY = "__debug_events__";
+const DEBUG_EVENTS_MAX = 300;
+
+interface EdgeDebugEventRecord {
+  ts: number;
+  phase: string;
+  roomId: string | null;
+  trace: string | null;
+  ua: string;
+  origin: string;
+  upgrade: string;
+  hasWsKey: boolean;
+  hasWsVersion: boolean;
+  cfRay: string;
+  httpProtocol: string;
+  detail?: string;
+  status?: number;
+  hasWebSocket?: boolean;
+}
 
 interface SocketAttachment {
   peerId: string;
@@ -112,6 +131,45 @@ export class SignalingRoomDO {
   async fetch(request: Request): Promise<Response> {
     await this.ensureHydrated();
 
+    const url = new URL(request.url);
+    if (url.pathname === "/__internal/debug/edge-event" && request.method === "POST") {
+      if (!this.isInternalDebugAuthorized(request)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const payload = (await request.json().catch(() => null)) as EdgeDebugEventRecord | null;
+      if (!payload || typeof payload !== "object") {
+        return new Response("Bad Request", { status: 400 });
+      }
+      const events = (await this.state.storage.get<EdgeDebugEventRecord[]>(DEBUG_EVENTS_KEY)) ?? [];
+      events.push(payload);
+      if (events.length > DEBUG_EVENTS_MAX) {
+        events.splice(0, events.length - DEBUG_EVENTS_MAX);
+      }
+      await this.state.storage.put(DEBUG_EVENTS_KEY, events);
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === "/__internal/debug/edge-recent" && request.method === "GET") {
+      if (!this.isInternalDebugAuthorized(request)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const limitRaw = Number(url.searchParams.get("limit") ?? "80");
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 80;
+      const events = (await this.state.storage.get<EdgeDebugEventRecord[]>(DEBUG_EVENTS_KEY)) ?? [];
+      return new Response(
+        JSON.stringify({
+          count: Math.min(limit, events.length),
+          events: events.slice(-limit),
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+          },
+        },
+      );
+    }
+
     if (!isWebSocketHandshakeRequest(request)) {
       return new Response("Expected websocket upgrade", { status: 426 });
     }
@@ -124,7 +182,6 @@ export class SignalingRoomDO {
       return new Response("Missing authentication headers", { status: 401 });
     }
 
-    const url = new URL(request.url);
     const requestedResumeToken = url.searchParams.get("resumeToken");
     const previousConnection = requestedResumeToken
       ? await this.tryResumeByToken(requestedResumeToken, userId, roomId)
@@ -681,5 +738,13 @@ export class SignalingRoomDO {
       }
       socket.send(message);
     }
+  }
+
+  private isInternalDebugAuthorized(request: Request): boolean {
+    const provided = request.headers.get("x-internal-secret");
+    if (!provided) {
+      return false;
+    }
+    return provided === this.env.INTERNAL_API_SECRET || provided === this.env.DEV_ISSUER_SECRET;
   }
 }

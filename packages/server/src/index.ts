@@ -2,7 +2,7 @@ import { fromBase64Url, hmacSha1Base64 } from "./crypto-utils";
 import { signJoinToken, parseBearerToken, verifyJoinToken } from "./join-token";
 import { RateLimitDO } from "./do/rate-limit-do";
 import { SignalingRoomDO } from "./do/signaling-room-do";
-import type { Env } from "./types";
+import type { Env, ExecutionContextLike } from "./types";
 
 interface TurnCredentials {
   username: string;
@@ -147,14 +147,67 @@ function getHttpProtocol(request: Request): string {
   return value || "unknown";
 }
 
-function pushWsDebug(event: Omit<WsDebugEvent, "ts">): void {
-  wsDebugEvents.push({
+function pushWsDebug(event: Omit<WsDebugEvent, "ts">): WsDebugEvent {
+  const fullEvent: WsDebugEvent = {
     ts: Date.now(),
     ...event,
-  });
+  };
+  wsDebugEvents.push(fullEvent);
   if (wsDebugEvents.length > WS_DEBUG_MAX) {
     wsDebugEvents.splice(0, wsDebugEvents.length - WS_DEBUG_MAX);
   }
+  return fullEvent;
+}
+
+async function appendRoomWsDebug(env: Env, event: WsDebugEvent): Promise<void> {
+  if (!event.roomId) {
+    return;
+  }
+  if (!env.INTERNAL_API_SECRET) {
+    return;
+  }
+  const roomStub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName(event.roomId));
+  await roomStub.fetch("https://room.internal/__internal/debug/edge-event", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-internal-secret": env.INTERNAL_API_SECRET,
+    },
+    body: JSON.stringify(event),
+  });
+}
+
+function recordWsDebug(env: Env, ctx: ExecutionContextLike, event: Omit<WsDebugEvent, "ts">): void {
+  const fullEvent = pushWsDebug(event);
+  ctx.waitUntil(
+    appendRoomWsDebug(env, fullEvent).catch(() => {
+      // best-effort debug path
+    }),
+  );
+}
+
+async function readRoomWsDebug(env: Env, roomId: string, limit: number): Promise<WsDebugEvent[] | null> {
+  if (!env.INTERNAL_API_SECRET) {
+    return null;
+  }
+  const roomStub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName(roomId));
+  const response = await roomStub.fetch(
+    `https://room.internal/__internal/debug/edge-recent?limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "GET",
+      headers: {
+        "x-internal-secret": env.INTERNAL_API_SECRET,
+      },
+    },
+  );
+  if (!response.ok) {
+    return null;
+  }
+  const payload = (await response.json()) as { events?: WsDebugEvent[] };
+  if (!Array.isArray(payload.events)) {
+    return null;
+  }
+  return payload.events;
 }
 
 function isDebugAuthorized(request: Request, env: Env): boolean {
@@ -227,7 +280,12 @@ function withCors(response: Response): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
+    const executionContext = ctx ?? {
+      waitUntil() {
+        // no-op fallback for tests
+      },
+    };
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -251,11 +309,23 @@ export default {
       const roomFilter = url.searchParams.get("roomId");
       const limitRaw = Number(url.searchParams.get("limit") ?? "80");
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 80;
+      if (roomFilter) {
+        const roomEvents = await readRoomWsDebug(env, roomFilter, limit).catch(() => null);
+        if (roomEvents) {
+          return jsonResponse({
+            count: roomEvents.length,
+            roomId: roomFilter,
+            source: "room-do",
+            events: roomEvents,
+          });
+        }
+      }
       const filtered = roomFilter ? wsDebugEvents.filter((event) => event.roomId === roomFilter) : wsDebugEvents;
       const events = filtered.slice(-limit);
       return jsonResponse({
         count: events.length,
         roomId: roomFilter ?? null,
+        source: "edge-isolate",
         events,
       });
     }
@@ -376,7 +446,7 @@ export default {
     };
 
     if (roomId && !isWebSocketHandshakeRequest(request)) {
-      pushWsDebug({
+      recordWsDebug(env, executionContext, {
         ...wsMeta,
         phase: "edge_non_ws_room_route",
         detail: "room route requested without websocket handshake headers",
@@ -385,14 +455,14 @@ export default {
     }
 
     if (roomId && isWebSocketHandshakeRequest(request)) {
-      pushWsDebug({
+      recordWsDebug(env, executionContext, {
         ...wsMeta,
         phase: "edge_ws_request",
       });
 
       const token = parseTokenFromRequest(request, url);
       if (!token) {
-        pushWsDebug({
+        recordWsDebug(env, executionContext, {
           ...wsMeta,
           phase: "edge_ws_reject_missing_token",
         });
@@ -410,7 +480,7 @@ export default {
           message === "Token expired"
             ? `${message} now=${now} exp=${exp ?? "unknown"} skew=${exp !== null ? now - exp : "unknown"}`
             : message;
-        pushWsDebug({
+        recordWsDebug(env, executionContext, {
           ...wsMeta,
           phase: "edge_ws_reject_bad_token",
           detail,
@@ -431,12 +501,12 @@ export default {
         headers,
       });
 
-      pushWsDebug({
+      recordWsDebug(env, executionContext, {
         ...wsMeta,
         phase: "edge_ws_forward_to_do",
       });
       const response = await roomStub.fetch(doRequest);
-      pushWsDebug({
+      recordWsDebug(env, executionContext, {
         ...wsMeta,
         phase: "edge_ws_response_from_do",
         status: response.status,
