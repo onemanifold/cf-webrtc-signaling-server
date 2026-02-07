@@ -83,6 +83,21 @@ function extractRoomIdFromPath(pathname: string): string | null {
   return decodeURIComponent(match[1]);
 }
 
+function isWebSocketHandshakeRequest(request: Request): boolean {
+  const upgrade = request.headers.get("Upgrade");
+  if (upgrade && upgrade.toLowerCase() === "websocket") {
+    return true;
+  }
+
+  // Some clients/proxies may not expose Upgrade cleanly; accept standard WS hint headers too.
+  return (
+    request.headers.has("sec-websocket-key") ||
+    request.headers.has("Sec-WebSocket-Key") ||
+    request.headers.has("sec-websocket-version") ||
+    request.headers.has("Sec-WebSocket-Version")
+  );
+}
+
 function parseCommaList(input: string | undefined): string[] {
   if (!input) {
     return [];
@@ -265,7 +280,7 @@ export default {
     }
 
     const roomId = extractRoomIdFromPath(url.pathname);
-    if (roomId && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+    if (roomId && isWebSocketHandshakeRequest(request)) {
       const token = parseTokenFromRequest(request, url);
       if (!token) {
         return jsonError("UNAUTHORIZED", "Missing token for websocket", 401);

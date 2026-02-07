@@ -82,6 +82,20 @@ function nowMs(): number {
   return Date.now();
 }
 
+function isWebSocketHandshakeRequest(request: Request): boolean {
+  const upgrade = request.headers.get("Upgrade");
+  if (upgrade && upgrade.toLowerCase() === "websocket") {
+    return true;
+  }
+
+  return (
+    request.headers.has("sec-websocket-key") ||
+    request.headers.has("Sec-WebSocket-Key") ||
+    request.headers.has("sec-websocket-version") ||
+    request.headers.has("Sec-WebSocket-Version")
+  );
+}
+
 export class SignalingRoomDO {
   private readonly state: DurableObjectState;
   private readonly env: Env;
@@ -98,8 +112,7 @@ export class SignalingRoomDO {
   async fetch(request: Request): Promise<Response> {
     await this.ensureHydrated();
 
-    const upgrade = request.headers.get("Upgrade");
-    if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+    if (!isWebSocketHandshakeRequest(request)) {
       return new Response("Expected websocket upgrade", { status: 426 });
     }
 
