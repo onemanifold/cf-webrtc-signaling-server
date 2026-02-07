@@ -63,6 +63,7 @@ if (defaultInternalSecret) {
 let signaling: Nullable<SignalingClient> = null;
 let mesh: Nullable<WebRTCMeshClient> = null;
 let localStream: Nullable<MediaStream> = null;
+let isConnecting = false;
 const peers = new Map<string, PeerSummary>();
 const remoteStreamByPeer = new Map<string, MediaStream>();
 
@@ -90,11 +91,28 @@ function toWsBase(base: string): string {
 }
 
 function setConnectedUiState(connected: boolean): void {
-  connectBtn.disabled = connected;
+  connectBtn.disabled = connected || isConnecting;
   disconnectBtn.disabled = !connected;
   resolveAliasBtn.disabled = !connected;
   claimAliasBtn.disabled = !connected;
   sendChatBtn.disabled = !connected;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
 }
 
 function makeShareLink(): string {
@@ -294,96 +312,110 @@ function bindMeshEvents(instance: WebRTCMeshClient): void {
 }
 
 async function connect(): Promise<void> {
+  if (isConnecting) {
+    throw new Error("Connection already in progress");
+  }
   if (signaling || mesh) {
     throw new Error("Already connected");
   }
+  isConnecting = true;
+  setConnectedUiState(false);
 
-  const roomId = roomIdInput.value.trim();
-  let token = joinTokenInput.value.trim();
-  if (!roomId) {
-    throw new Error("Room ID is required");
-  }
-  if (!token) {
-    appendLog(eventLog, "Join token missing; issuing automatically from /token/issue.");
-    token = await issueTokenValue();
-    joinTokenInput.value = token;
-  }
-  if (!token) {
-    throw new Error("Join token is required. Paste a token or click Issue Token.");
-  }
-
-  const wsBaseUrl = toWsBase(workerBaseUrlInput.value);
-  const httpBaseUrl = toHttpBase(workerBaseUrlInput.value);
-
-  const client = new SignalingClient({
-    wsBaseUrl,
-    httpBaseUrl,
-    roomId,
-    alias: aliasInput.value.trim() || undefined,
-    getJoinToken: async () => joinTokenInput.value.trim(),
-  });
-
-  bindSignalingEvents(client);
-
-  let rtcConfiguration: RTCConfiguration | undefined;
   try {
-    let turn = await client.fetchTurnCredentials();
-    if (!turn?.iceServers) {
-      throw new Error("ICE credentials response missing iceServers");
+    const roomId = roomIdInput.value.trim();
+    let token = joinTokenInput.value.trim();
+    if (!roomId) {
+      throw new Error("Room ID is required");
     }
-    rtcConfiguration = {
-      iceServers: turn.iceServers as unknown as RTCIceServer[],
-    };
-    appendLog(eventLog, `Fetched ICE servers (${turn.iceServers.length}).`);
-  } catch (error) {
-    const message = (error as Error).message ?? String(error);
-    if (message.includes("(401)")) {
-      appendLog(eventLog, "Join token rejected (401); issuing a fresh token and retrying once.");
+    if (!token) {
+      appendLog(eventLog, "Join token missing; issuing automatically from /token/issue.");
       token = await issueTokenValue();
       joinTokenInput.value = token;
-      try {
-        const turn = await client.fetchTurnCredentials();
-        rtcConfiguration = {
-          iceServers: turn.iceServers as unknown as RTCIceServer[],
-        };
-        appendLog(eventLog, `Fetched ICE servers after token refresh (${turn.iceServers.length}).`);
-      } catch (retryError) {
-        appendLog(eventLog, `ICE credentials fetch still failing after token refresh: ${(retryError as Error).message}`);
+    }
+    if (!token) {
+      throw new Error("Join token is required. Paste a token or click Issue Token.");
+    }
+
+    const wsBaseUrl = toWsBase(workerBaseUrlInput.value);
+    const httpBaseUrl = toHttpBase(workerBaseUrlInput.value);
+
+    const client = new SignalingClient({
+      wsBaseUrl,
+      httpBaseUrl,
+      roomId,
+      alias: aliasInput.value.trim() || undefined,
+      getJoinToken: async () => joinTokenInput.value.trim(),
+    });
+
+    bindSignalingEvents(client);
+
+    let rtcConfiguration: RTCConfiguration | undefined;
+    try {
+      let turn = await client.fetchTurnCredentials();
+      if (!turn?.iceServers) {
+        throw new Error("ICE credentials response missing iceServers");
       }
-    } else {
-      appendLog(eventLog, `ICE credentials fetch skipped/failing: ${message}`);
+      rtcConfiguration = {
+        iceServers: turn.iceServers as unknown as RTCIceServer[],
+      };
+      appendLog(eventLog, `Fetched ICE servers (${turn.iceServers.length}).`);
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+      if (message.includes("(401)")) {
+        appendLog(eventLog, "Join token rejected (401); issuing a fresh token and retrying once.");
+        token = await issueTokenValue();
+        joinTokenInput.value = token;
+        try {
+          const turn = await client.fetchTurnCredentials();
+          rtcConfiguration = {
+            iceServers: turn.iceServers as unknown as RTCIceServer[],
+          };
+          appendLog(eventLog, `Fetched ICE servers after token refresh (${turn.iceServers.length}).`);
+        } catch (retryError) {
+          appendLog(
+            eventLog,
+            `ICE credentials fetch still failing after token refresh: ${(retryError as Error).message}`,
+          );
+        }
+      } else {
+        appendLog(eventLog, `ICE credentials fetch skipped/failing: ${message}`);
+      }
     }
-  }
 
-  const meshClient = new WebRTCMeshClient({
-    signaling: client,
-    rtcConfiguration,
-    autoCreateDataChannel: true,
-    dataChannelLabel: "p2p-chat",
-  });
+    const meshClient = new WebRTCMeshClient({
+      signaling: client,
+      rtcConfiguration,
+      autoCreateDataChannel: true,
+      dataChannelLabel: "p2p-chat",
+    });
 
-  bindMeshEvents(meshClient);
+    bindMeshEvents(meshClient);
 
-  try {
-    await meshClient.start();
-  } catch (error) {
-    const message = (error as Error).message ?? String(error);
-    if (message.includes("before session established (1006)")) {
-      appendLog(eventLog, "WebSocket failed before session established. Clearing stale token; click Connect again.");
-      joinTokenInput.value = "";
+    try {
+      await withTimeout(meshClient.start(), 15_000, "Signaling connection");
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+      if (message.includes("before session established (1006)")) {
+        appendLog(eventLog, "WebSocket failed before session established. Clearing stale token; click Connect again.");
+        joinTokenInput.value = "";
+      }
+      meshClient.stop();
+      throw error;
     }
-    throw error;
-  }
 
-  if (localStream) {
-    for (const track of localStream.getTracks()) {
-      meshClient.addTrack(track, localStream);
+    if (localStream) {
+      for (const track of localStream.getTracks()) {
+        meshClient.addTrack(track, localStream);
+      }
     }
-  }
 
-  signaling = client;
-  mesh = meshClient;
-  setConnectedUiState(true);
+    signaling = client;
+    mesh = meshClient;
+    setConnectedUiState(true);
+  } finally {
+    isConnecting = false;
+    setConnectedUiState(Boolean(signaling && mesh));
+  }
 }
 
 function disconnect(): void {
