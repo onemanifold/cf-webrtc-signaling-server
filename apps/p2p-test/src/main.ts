@@ -68,6 +68,7 @@ let wsDialAttempt = 0;
 let tokenRefreshCount = 0;
 const peers = new Map<string, PeerSummary>();
 const remoteStreamByPeer = new Map<string, MediaStream>();
+const openDataPeers = new Set<string>();
 
 function appendLog(element: HTMLPreElement, message: string): void {
   const next = `${new Date().toISOString()} ${message}`;
@@ -464,6 +465,7 @@ function bindMeshEvents(instance: WebRTCMeshClient): void {
 
   instance.on("peerDisconnected", ({ peerId, state }) => {
     appendLog(eventLog, `P2P disconnected: ${peerId} (${state})`);
+    openDataPeers.delete(peerId);
     removeRemoteCard(peerId);
   });
 
@@ -479,7 +481,18 @@ function bindMeshEvents(instance: WebRTCMeshClient): void {
   });
 
   instance.on("dataChannel", ({ peerId, channel }) => {
-    appendLog(eventLog, `Data channel opened for ${peerId}: ${channel.label}`);
+    appendLog(eventLog, `Data channel created for ${peerId}: ${channel.label}`);
+    channel.onopen = () => {
+      openDataPeers.add(peerId);
+      appendLog(eventLog, `Data channel OPEN for ${peerId}: ${channel.label}`);
+    };
+    channel.onclose = () => {
+      openDataPeers.delete(peerId);
+      appendLog(eventLog, `Data channel CLOSE for ${peerId}: ${channel.label}`);
+    };
+    channel.onerror = () => {
+      appendLog(eventLog, `Data channel ERROR for ${peerId}: ${channel.label}`);
+    };
     channel.onmessage = (event) => {
       const text = typeof event.data === "string" ? event.data : "[binary]";
       appendLog(chatLog, `${peerId}: ${text}`);
@@ -648,6 +661,7 @@ function disconnect(): void {
   mesh?.stop();
   mesh = null;
   signaling = null;
+  openDataPeers.clear();
   peers.clear();
   renderPeers();
   setConnectedUiState(false);
@@ -704,6 +718,10 @@ function sendChat(): void {
   }
   const message = chatInput.value.trim();
   if (!message) {
+    return;
+  }
+  if (openDataPeers.size === 0) {
+    appendLog(eventLog, "No open data channels yet; chat message not sent.");
     return;
   }
   mesh.broadcastData(message);
