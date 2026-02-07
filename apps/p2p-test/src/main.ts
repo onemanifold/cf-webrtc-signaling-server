@@ -220,6 +220,54 @@ async function probeWsHttpPath(httpBaseUrl: string, roomId: string, token: strin
   }
 }
 
+async function probeWsReachability(wsBaseUrl: string, roomId: string): Promise<void> {
+  const trace = `ws-probe-${crypto.randomUUID().slice(0, 8)}`;
+  const probeUrl = `${wsBaseUrl}/${encodeURIComponent(roomId)}?token=x&trace=${trace}`;
+  const startedAt = Date.now();
+
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = (message: string) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      appendLog(eventLog, message);
+      resolve();
+    };
+
+    const socket = new WebSocket(probeUrl);
+    const timeoutId = window.setTimeout(() => {
+      finish(`WS reachability probe trace=${trace} timeout elapsed=${Date.now() - startedAt}ms`);
+      try {
+        socket.close(1000, "probe-timeout");
+      } catch {
+        // no-op
+      }
+    }, 8_000);
+
+    const clear = () => window.clearTimeout(timeoutId);
+    socket.addEventListener("open", () => {
+      clear();
+      finish(`WS reachability probe trace=${trace} open elapsed=${Date.now() - startedAt}ms`);
+      try {
+        socket.close(1000, "probe-done");
+      } catch {
+        // no-op
+      }
+    });
+    socket.addEventListener("close", (event) => {
+      clear();
+      finish(
+        `WS reachability probe trace=${trace} close elapsed=${Date.now() - startedAt}ms code=${event.code} reason=${event.reason}`,
+      );
+    });
+    socket.addEventListener("error", () => {
+      appendLog(eventLog, `WS reachability probe trace=${trace} error elapsed=${Date.now() - startedAt}ms`);
+    });
+  });
+}
+
 function setConnectedUiState(connected: boolean): void {
   connectBtn.disabled = connected || isConnecting;
   disconnectBtn.disabled = !connected;
@@ -474,6 +522,7 @@ async function connect(): Promise<void> {
     const httpBaseUrl = toHttpBase(workerBaseUrlInput.value);
     appendLog(eventLog, `Transport config wsBaseUrl=${wsBaseUrl} httpBaseUrl=${httpBaseUrl}`);
     await probeWsHttpPath(httpBaseUrl, roomId, token);
+    await probeWsReachability(wsBaseUrl, roomId);
 
     const client = new SignalingClient({
       wsBaseUrl,
