@@ -307,7 +307,9 @@ export default {
       });
 
       const response = await roomStub.fetch(doRequest);
-      return withCors(response);
+      // For websocket upgrades, return DO response as-is. Re-wrapping 101 responses can
+      // cause client-side transport instability in some browsers.
+      return response;
     }
 
     return jsonError("NOT_FOUND", "Route not found", 404);
