@@ -255,16 +255,7 @@ export class SignalingClient {
     });
 
     this.onSocketEvent(socket, "message", (event) => {
-      const data = this.extractMessageData(event);
-      if (!data) {
-        return;
-      }
-      const message = parseServerMessage(data);
-      if (!message) {
-        this.events.emit("error", new Error("Malformed server message"));
-        return;
-      }
-      void this.handleServerMessage(message);
+      void this.handleIncomingMessage(event);
     });
 
     this.onSocketEvent(socket, "error", () => {
@@ -303,21 +294,45 @@ export class SignalingClient {
     throw new Error("Socket implementation must provide addEventListener or on");
   }
 
-  private extractMessageData(event: unknown): string | null {
+  private async handleIncomingMessage(event: unknown): Promise<void> {
+    const data = await this.extractMessageData(event);
+    if (!data) {
+      return;
+    }
+    const message = parseServerMessage(data);
+    if (!message) {
+      this.events.emit("error", new Error("Malformed server message"));
+      return;
+    }
+    await this.handleServerMessage(message);
+  }
+
+  private async extractMessageData(event: unknown): Promise<string | null> {
     if (typeof event === "string") {
       return event;
     }
 
     if (event && typeof event === "object") {
       const candidate = event as Record<string, unknown>;
-      if (typeof candidate.data === "string") {
-        return candidate.data;
+      const data = candidate.data;
+      if (typeof data === "string") {
+        return data;
       }
-      if (candidate.data instanceof ArrayBuffer) {
-        return new TextDecoder().decode(candidate.data);
+      if (data instanceof ArrayBuffer) {
+        return new TextDecoder().decode(data);
       }
-      if (typeof Buffer !== "undefined" && Buffer.isBuffer(candidate.data)) {
-        return candidate.data.toString("utf8");
+      if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data)) {
+        return new TextDecoder().decode(data);
+      }
+      if (data && typeof data === "object" && typeof (data as { text?: unknown }).text === "function") {
+        try {
+          return await (data as Blob).text();
+        } catch {
+          return null;
+        }
+      }
+      if (typeof Buffer !== "undefined" && Buffer.isBuffer(data)) {
+        return data.toString("utf8");
       }
     }
 

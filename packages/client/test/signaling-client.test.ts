@@ -38,6 +38,10 @@ class MockWebSocket implements WebSocketLike {
     this.emit("message", { data: JSON.stringify(data) });
   }
 
+  receiveRaw(data: unknown): void {
+    this.emit("message", { data });
+  }
+
   private emit(event: string, payload: unknown): void {
     const set = this.handlers.get(event);
     if (!set) {
@@ -186,5 +190,36 @@ describe("SignalingClient", () => {
     const ack = await sending;
     expect(ack.deliveryId).toBe(parsed.deliveryId);
     expect(ack.ack.byPeerId).toBe("peer-bob");
+  });
+
+  it("handles Blob websocket payloads (browser style)", async () => {
+    let socket: MockWebSocket | null = null;
+    const client = new SignalingClient({
+      wsBaseUrl: "wss://example.com/ws",
+      roomId: "room-a",
+      getJoinToken: () => "token-1",
+      webSocketFactory: (url) => {
+        socket = new MockWebSocket(url);
+        queueMicrotask(() => socket?.open());
+        return socket;
+      },
+    });
+
+    const connecting = client.connect();
+    await Promise.resolve();
+    const payload = {
+      type: "session.welcome",
+      peerId: "peer-blob",
+      userId: "user-blob",
+      roomId: "room-a",
+      resumeToken: "resume-blob",
+      resumeExpiresAt: Date.now() + 30_000,
+      peers: [],
+    };
+    socket?.receiveRaw(new Blob([JSON.stringify(payload)], { type: "application/json" }));
+
+    const welcome = await connecting;
+    expect(welcome.peerId).toBe("peer-blob");
+    expect(client.peerId).toBe("peer-blob");
   });
 });
