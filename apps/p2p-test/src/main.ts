@@ -438,7 +438,7 @@ async function connect(): Promise<void> {
     bindMeshEvents(meshClient);
 
     try {
-      await withTimeout(meshClient.start(), 15_000, "Signaling connection");
+      await withTimeout(meshClient.start(), 30_000, "Signaling connection");
       appendLog(eventLog, "Signaling session established.");
     } catch (error) {
       const message = (error as Error).message ?? String(error);

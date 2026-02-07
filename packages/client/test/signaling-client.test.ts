@@ -296,4 +296,49 @@ describe("SignalingClient", () => {
     expect(errors).toHaveLength(0);
     expect(client.peerId).toBe("peer-1");
   });
+
+  it("reconnects before session welcome without failing connect()", async () => {
+    const sockets: MockWebSocket[] = [];
+    const client = new SignalingClient({
+      wsBaseUrl: "wss://example.com/ws",
+      roomId: "room-a",
+      getJoinToken: () => "token-1",
+      reconnect: {
+        enabled: true,
+        minDelayMs: 1,
+        maxDelayMs: 1,
+        jitterMs: 0,
+      },
+      webSocketFactory: (url) => {
+        const socket = new MockWebSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const connecting = client.connect();
+    await Promise.resolve();
+    const socket1 = sockets[0];
+    expect(socket1).toBeTruthy();
+    socket1?.open();
+    socket1?.close(1006, "network");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const socket2 = sockets[1];
+    expect(socket2).toBeTruthy();
+    socket2?.open();
+    socket2?.receive({
+      type: "session.welcome",
+      peerId: "peer-2",
+      userId: "user-2",
+      roomId: "room-a",
+      resumeToken: "resume-2",
+      resumeExpiresAt: Date.now() + 30_000,
+      peers: [],
+    });
+
+    const welcome = await connecting;
+    expect(welcome.peerId).toBe("peer-2");
+    expect(client.peerId).toBe("peer-2");
+  });
 });

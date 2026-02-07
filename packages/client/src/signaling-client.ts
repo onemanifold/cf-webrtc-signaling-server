@@ -41,6 +41,7 @@ export interface SignalingClientOptions {
   heartbeatIntervalMs?: number;
   requestTimeoutMs?: number;
   deliveryAckTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
   reconnect?: ReconnectOptions;
 }
 
@@ -253,10 +254,32 @@ export class SignalingClient {
   }
 
   private bindSocketHandlers(socket: WebSocketLike): void {
+    const handshakeTimeoutMs = this.options.handshakeTimeoutMs ?? 8_000;
+    const handshakeWatchdog = setTimeout(() => {
+      if (!this.isCurrentSocket(socket)) {
+        return;
+      }
+      if (socket.readyState !== 0) {
+        return;
+      }
+      this.events.emit("error", new Error(`WebSocket handshake timed out (${handshakeTimeoutMs}ms)`));
+      this.handleSocketClosed(socket, 1006, "handshake-timeout");
+      try {
+        socket.close(1000, "handshake-timeout");
+      } catch {
+        // no-op
+      }
+    }, handshakeTimeoutMs);
+
+    const clearHandshakeWatchdog = () => {
+      clearTimeout(handshakeWatchdog);
+    };
+
     this.onSocketEvent(socket, "open", () => {
       if (!this.isCurrentSocket(socket)) {
         return;
       }
+      clearHandshakeWatchdog();
       this.reconnectAttempt = 0;
       this.startHeartbeat();
     });
@@ -279,27 +302,36 @@ export class SignalingClient {
       if (!this.isCurrentSocket(socket)) {
         return;
       }
+      clearHandshakeWatchdog();
       const code = this.extractCloseCode(event);
       const reason = this.extractCloseReason(event);
-
-      this.stopHeartbeat();
-      this.socket = null;
-
-      this.events.emit("disconnected", { code, reason });
-
-      if (this.connectReject && !this.peerId) {
-        this.connectReject(new Error(`WebSocket closed before session established (${code})`));
-        this.resetConnectPromise();
-      }
-
-      if (this.shouldReconnect && (this.options.reconnect?.enabled ?? true)) {
-        this.scheduleReconnect();
-      }
+      this.handleSocketClosed(socket, code, reason);
     });
   }
 
   private isCurrentSocket(socket: WebSocketLike): boolean {
     return this.socket === socket;
+  }
+
+  private handleSocketClosed(socket: WebSocketLike, code: number, reason: string): void {
+    if (!this.isCurrentSocket(socket)) {
+      return;
+    }
+
+    this.stopHeartbeat();
+    this.socket = null;
+
+    this.events.emit("disconnected", { code, reason });
+
+    const shouldAttemptReconnect = this.shouldReconnect && (this.options.reconnect?.enabled ?? true);
+    if (this.connectReject && !this.peerId && !shouldAttemptReconnect) {
+      this.connectReject(new Error(`WebSocket closed before session established (${code})`));
+      this.resetConnectPromise();
+    }
+
+    if (shouldAttemptReconnect) {
+      this.scheduleReconnect();
+    }
   }
 
   private onSocketEvent(socket: WebSocketLike, event: string, handler: (...args: unknown[]) => void): void {
