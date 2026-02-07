@@ -234,12 +234,17 @@ async function detectPagesUrlFromGitRemote() {
 }
 
 async function issueJoinToken({ workerUrl, internalSecret, roomId, userId, alias, ttlSeconds }) {
+  const headers = {
+    "content-type": "application/json",
+  };
+  if (internalSecret) {
+    headers["x-internal-secret"] = internalSecret;
+    headers["x-dev-issuer-secret"] = internalSecret;
+  }
+
   const response = await fetch(`${workerUrl}/token/issue`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-internal-secret": internalSecret,
-    },
+    headers,
     body: JSON.stringify({
       roomId,
       userId,
@@ -314,10 +319,6 @@ async function main() {
   if (!appUrl) {
     throw new Error("Could not resolve app URL. Provide --app-url or set origin remote to a GitHub repo.");
   }
-  if (!internalSecret) {
-    throw new Error("Missing INTERNAL_API_SECRET in credentials or env.");
-  }
-
   if (String(vars.ALLOW_DEV_TOKEN_ISSUER).toLowerCase() !== "true") {
     console.warn(
       "Warning: credentials indicate ALLOW_DEV_TOKEN_ISSUER is not true. /token/issue may reject requests.",

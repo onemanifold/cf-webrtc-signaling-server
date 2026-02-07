@@ -187,8 +187,8 @@ npm run test:links -- --open
 
 The app also auto-issues a join token on connect if:
 - the Join Token field is empty, and
-- `INTERNAL_API_SECRET` is provided in the app.
 - `/token/issue` is enabled (`ALLOW_DEV_TOKEN_ISSUER=true`).
+- optional dev issuer secret is only needed if you lock `/token/issue` in your own deployment.
 
 ## Credentials Reference
 Template: `credentials.example.json`
@@ -219,6 +219,7 @@ Optional:
 - `credentials.json` is local-only and gitignored.
 - Never expose `JOIN_TOKEN_SECRET`, `INTERNAL_API_SECRET`, `TURN_SHARED_SECRET` to clients.
 - `/token/issue` is dev-only and controlled by `ALLOW_DEV_TOKEN_ISSUER`.
+- Default dev flow allows token issue without client secret; if you want a locked issuer flow, require and validate a secret in your deployment policy.
 
 ## Billing Note
 Workers has a free tier and does not require Zero Trust for this project.

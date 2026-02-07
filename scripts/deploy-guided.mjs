@@ -637,32 +637,41 @@ function parseJsonArray(text) {
 async function waitForWorkflowRun({ repo, workflowName, startedAtMs }) {
   const timeoutMs = 15 * 60 * 1000;
   const deadline = Date.now() + timeoutMs;
+  let runId = "";
 
   while (Date.now() < deadline) {
-    const { out } = await runCapture("gh", [
-      "run",
-      "list",
-      "--repo",
-      repo,
-      "--workflow",
-      workflowName,
-      "--json",
-      "databaseId,createdAt",
-      "--limit",
-      "10",
-    ]);
+    if (!runId) {
+      const { out } = await runCapture("gh", [
+        "run",
+        "list",
+        "--repo",
+        repo,
+        "--workflow",
+        workflowName,
+        "--json",
+        "databaseId,createdAt",
+        "--limit",
+        "10",
+      ]);
 
-    const runs = parseJsonArray(out);
-    const matched = runs
-      .filter((run) => {
-        const createdAtMs = Date.parse(String(run.createdAt ?? ""));
-        return Number.isFinite(createdAtMs) && createdAtMs >= startedAtMs - 15_000;
-      })
-      .sort((a, b) => Date.parse(String(b.createdAt ?? "")) - Date.parse(String(a.createdAt ?? "")))[0];
+      const runs = parseJsonArray(out);
+      const matched = runs
+        .filter((run) => {
+          const createdAtMs = Date.parse(String(run.createdAt ?? ""));
+          return Number.isFinite(createdAtMs) && createdAtMs >= startedAtMs - 15_000;
+        })
+        .sort((a, b) => Date.parse(String(b.createdAt ?? "")) - Date.parse(String(a.createdAt ?? "")))[0];
 
-    if (matched && matched.databaseId) {
-      const runId = String(matched.databaseId);
-      await runCommand("gh", ["run", "watch", runId, "--repo", repo, "--exit-status"]);
+      if (matched && matched.databaseId) {
+        runId = String(matched.databaseId);
+      } else {
+        await sleep(4_000);
+        continue;
+      }
+    }
+
+    let viewed = null;
+    try {
       const { out: viewOut } = await runCapture("gh", [
         "run",
         "view",
@@ -672,7 +681,14 @@ async function waitForWorkflowRun({ repo, workflowName, startedAtMs }) {
         "--json",
         "url,status,conclusion",
       ]);
-      const viewed = JSON.parse(viewOut);
+      viewed = JSON.parse(viewOut);
+    } catch {
+      // GitHub can lag right after workflow_dispatch; retry until timeout.
+      await sleep(4_000);
+      continue;
+    }
+
+    if (viewed.status === "completed") {
       if (viewed.conclusion !== "success") {
         throw new Error(`${workflowName} finished with ${viewed.conclusion}: ${viewed.url}`);
       }

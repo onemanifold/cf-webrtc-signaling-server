@@ -4,11 +4,6 @@ const baseUrl = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const roomId = process.env.ROOM_ID ?? "smoke-room";
 const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
 
-if (!internalSecret) {
-  console.error("INTERNAL_API_SECRET is required for /token/issue");
-  process.exit(1);
-}
-
 const wsBaseUrl = baseUrl.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
 
 let WebSocketCtor = globalThis.WebSocket;
@@ -27,12 +22,17 @@ function createId(prefix) {
 }
 
 async function issueToken(userId, name) {
+  const headers = {
+    "content-type": "application/json",
+  };
+  if (internalSecret) {
+    headers["x-internal-secret"] = internalSecret;
+    headers["x-dev-issuer-secret"] = internalSecret;
+  }
+
   const response = await fetch(`${baseUrl}/token/issue`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-internal-secret": internalSecret,
-    },
+    headers,
     body: JSON.stringify({
       userId,
       roomId,

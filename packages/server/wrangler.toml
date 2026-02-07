@@ -5,7 +5,7 @@ workers_dev = true
 preview_urls = false
 
 [vars]
-ALLOW_DEV_TOKEN_ISSUER = "false"
+ALLOW_DEV_TOKEN_ISSUER = "true"
 TURN_TTL_SECONDS = "3600"
 TURN_RATE_LIMIT_MAX = "10"
 TURN_RATE_LIMIT_WINDOW_SEC = "60"

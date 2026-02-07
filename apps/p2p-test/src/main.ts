@@ -168,16 +168,21 @@ async function issueTokenValue(): Promise<string> {
   const alias = aliasInput.value.trim();
   const internalSecret = internalSecretInput.value.trim();
 
-  if (!baseUrl || !roomId || !userId || !internalSecret) {
-    throw new Error("worker base URL, room ID, user ID, and internal secret are required");
+  if (!baseUrl || !roomId || !userId) {
+    throw new Error("worker base URL, room ID, and user ID are required");
+  }
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (internalSecret) {
+    headers["x-internal-secret"] = internalSecret;
+    headers["x-dev-issuer-secret"] = internalSecret;
   }
 
   const response = await fetch(`${baseUrl}/token/issue`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-internal-secret": internalSecret,
-    },
+    headers,
     body: JSON.stringify({
       roomId,
       userId,
@@ -297,13 +302,13 @@ async function connect(): Promise<void> {
   if (!roomId) {
     throw new Error("Room ID is required");
   }
-  if (!token && internalSecretInput.value.trim()) {
-    appendLog(eventLog, "Join token missing; issuing automatically with internal secret.");
+  if (!token) {
+    appendLog(eventLog, "Join token missing; issuing automatically from /token/issue.");
     token = await issueTokenValue();
     joinTokenInput.value = token;
   }
   if (!token) {
-    throw new Error("Join token is required. Paste token or provide internal secret and click Issue Token.");
+    throw new Error("Join token is required. Paste a token or click Issue Token.");
   }
 
   const wsBaseUrl = toWsBase(workerBaseUrlInput.value);

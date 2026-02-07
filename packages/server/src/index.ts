@@ -27,7 +27,7 @@ const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type,authorization,x-internal-secret",
+  "access-control-allow-headers": "content-type,authorization,x-internal-secret,x-dev-issuer-secret",
 };
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -168,9 +168,15 @@ export default {
         return jsonError("DEV_ISSUER_DISABLED", "Token issuer is disabled", 403);
       }
 
-      const secret = request.headers.get("x-internal-secret");
-      if (!secret || secret !== env.INTERNAL_API_SECRET) {
-        return jsonError("FORBIDDEN", "Invalid internal secret", 403);
+      const providedSecret =
+        request.headers.get("x-dev-issuer-secret") ?? request.headers.get("x-internal-secret");
+      if (providedSecret) {
+        const validSecrets = [env.DEV_ISSUER_SECRET, env.INTERNAL_API_SECRET].filter(
+          (candidate): candidate is string => Boolean(candidate && candidate.length > 0),
+        );
+        if (!validSecrets.includes(providedSecret)) {
+          return jsonError("FORBIDDEN", "Invalid issuer secret", 403);
+        }
       }
 
       const body = (await request.json().catch(() => null)) as DevIssueTokenRequest | null;
