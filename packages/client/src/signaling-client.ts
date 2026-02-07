@@ -242,27 +242,43 @@ export class SignalingClient {
     }
     const url = `${base}/${encodeURIComponent(this.options.roomId)}?${params.toString()}`;
 
+    const previousSocket = this.socket;
     const socket = this.makeSocket(url);
     this.socket = socket;
+    if (previousSocket && previousSocket !== socket && previousSocket.readyState <= 1) {
+      previousSocket.close(1012, "superseded");
+    }
 
     this.bindSocketHandlers(socket);
   }
 
   private bindSocketHandlers(socket: WebSocketLike): void {
     this.onSocketEvent(socket, "open", () => {
+      if (!this.isCurrentSocket(socket)) {
+        return;
+      }
       this.reconnectAttempt = 0;
       this.startHeartbeat();
     });
 
     this.onSocketEvent(socket, "message", (event) => {
+      if (!this.isCurrentSocket(socket)) {
+        return;
+      }
       void this.handleIncomingMessage(event);
     });
 
     this.onSocketEvent(socket, "error", () => {
+      if (!this.isCurrentSocket(socket)) {
+        return;
+      }
       this.events.emit("error", new Error("WebSocket error"));
     });
 
     this.onSocketEvent(socket, "close", (event) => {
+      if (!this.isCurrentSocket(socket)) {
+        return;
+      }
       const code = this.extractCloseCode(event);
       const reason = this.extractCloseReason(event);
 
@@ -280,6 +296,10 @@ export class SignalingClient {
         this.scheduleReconnect();
       }
     });
+  }
+
+  private isCurrentSocket(socket: WebSocketLike): boolean {
+    return this.socket === socket;
   }
 
   private onSocketEvent(socket: WebSocketLike, event: string, handler: (...args: unknown[]) => void): void {
@@ -528,6 +548,12 @@ export class SignalingClient {
     this.reconnectAttempt += 1;
 
     this.reconnectTimer = setTimeout(async () => {
+      if (!this.shouldReconnect) {
+        return;
+      }
+      if (this.socket && this.socket.readyState <= 1) {
+        return;
+      }
       try {
         await this.openSocket();
       } catch (error) {

@@ -42,6 +42,10 @@ class MockWebSocket implements WebSocketLike {
     this.emit("message", { data });
   }
 
+  error(): void {
+    this.emit("error", {});
+  }
+
   private emit(event: string, payload: unknown): void {
     const set = this.handlers.get(event);
     if (!set) {
@@ -221,5 +225,75 @@ describe("SignalingClient", () => {
     const welcome = await connecting;
     expect(welcome.peerId).toBe("peer-blob");
     expect(client.peerId).toBe("peer-blob");
+  });
+
+  it("ignores stale socket events after reconnect", async () => {
+    const sockets: MockWebSocket[] = [];
+    const errors: Error[] = [];
+    const disconnects: Array<{ code: number; reason: string }> = [];
+
+    const client = new SignalingClient({
+      wsBaseUrl: "wss://example.com/ws",
+      roomId: "room-a",
+      getJoinToken: () => "token-1",
+      reconnect: {
+        enabled: true,
+        minDelayMs: 1,
+        maxDelayMs: 1,
+        jitterMs: 0,
+      },
+      webSocketFactory: (url) => {
+        const socket = new MockWebSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    client.on("error", (error) => errors.push(error));
+    client.on("disconnected", (event) => disconnects.push(event));
+
+    const firstConnect = client.connect();
+    await Promise.resolve();
+    const socket1 = sockets[0];
+    expect(socket1).toBeTruthy();
+    socket1?.open();
+    socket1?.receive({
+      type: "session.welcome",
+      peerId: "peer-1",
+      userId: "user-1",
+      roomId: "room-a",
+      resumeToken: "resume-1",
+      resumeExpiresAt: Date.now() + 30_000,
+      peers: [],
+    });
+    await firstConnect;
+
+    socket1?.close(1006, "");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const socket2 = sockets[1];
+    expect(socket2).toBeTruthy();
+    socket2?.open();
+    socket2?.receive({
+      type: "session.welcome",
+      peerId: "peer-1",
+      userId: "user-1",
+      roomId: "room-a",
+      resumeToken: "resume-2",
+      resumeExpiresAt: Date.now() + 30_000,
+      peers: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    socket1?.error();
+    socket1?.receive({
+      type: "error",
+      code: "STALE",
+      message: "stale socket event",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(disconnects).toHaveLength(1);
+    expect(errors).toHaveLength(0);
+    expect(client.peerId).toBe("peer-1");
   });
 });
