@@ -64,6 +64,7 @@ let signaling: Nullable<SignalingClient> = null;
 let mesh: Nullable<WebRTCMeshClient> = null;
 let localStream: Nullable<MediaStream> = null;
 let isConnecting = false;
+let wsDialAttempt = 0;
 const peers = new Map<string, PeerSummary>();
 const remoteStreamByPeer = new Map<string, MediaStream>();
 
@@ -377,17 +378,30 @@ async function connect(): Promise<void> {
       roomId,
       alias: aliasInput.value.trim() || undefined,
       getJoinToken: async () => joinTokenInput.value.trim(),
+      handshakeTimeoutMs: 20_000,
       webSocketFactory: (url) => {
-        appendLog(eventLog, `WS dialing ${redactWsUrl(url)}`);
+        wsDialAttempt += 1;
+        const attempt = wsDialAttempt;
+        const startedAt = Date.now();
+        appendLog(eventLog, `WS dialing attempt=${attempt} ${redactWsUrl(url)}`);
         const socket = new WebSocket(url);
+        const probe = window.setTimeout(() => {
+          appendLog(eventLog, `WS still connecting attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
+        }, 5_000);
+        const clearProbe = () => window.clearTimeout(probe);
         socket.addEventListener("open", () => {
-          appendLog(eventLog, "WS transport open");
+          clearProbe();
+          appendLog(eventLog, `WS transport open attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
         });
         socket.addEventListener("close", (event) => {
-          appendLog(eventLog, `WS transport close code=${event.code} reason=${event.reason}`);
+          clearProbe();
+          appendLog(
+            eventLog,
+            `WS transport close attempt=${attempt} elapsed=${Date.now() - startedAt}ms code=${event.code} reason=${event.reason}`,
+          );
         });
         socket.addEventListener("error", () => {
-          appendLog(eventLog, "WS transport error");
+          appendLog(eventLog, `WS transport error attempt=${attempt} elapsed=${Date.now() - startedAt}ms`);
         });
         return socket;
       },
@@ -565,6 +579,10 @@ roomIdInput.addEventListener("input", refreshShareLink);
 refreshShareLink();
 
 appendLog(eventLog, "App ready.");
+appendLog(
+  eventLog,
+  `Runtime ua=${navigator.userAgent} online=${navigator.onLine} origin=${window.location.origin}`,
+);
 
 if (shouldAutoConnect) {
   appendLog(eventLog, "Auto-connect requested by URL.");

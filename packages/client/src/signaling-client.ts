@@ -254,7 +254,7 @@ export class SignalingClient {
   }
 
   private bindSocketHandlers(socket: WebSocketLike): void {
-    const handshakeTimeoutMs = this.options.handshakeTimeoutMs ?? 8_000;
+    const handshakeTimeoutMs = this.options.handshakeTimeoutMs ?? 20_000;
     const handshakeWatchdog = setTimeout(() => {
       if (!this.isCurrentSocket(socket)) {
         return;
