@@ -228,7 +228,7 @@ export class SignalingClient {
 
     const response = await fetch(`${base}/turn-credentials?token=${encodeURIComponent(token)}`);
     if (!response.ok) {
-      throw new Error(`TURN credentials request failed (${response.status})`);
+      throw new Error(`ICE credentials request failed (${response.status})`);
     }
     return (await response.json()) as TurnCredentialsResponse;
   }

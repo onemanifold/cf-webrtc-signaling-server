@@ -38,11 +38,12 @@ const remoteVideos = getElement<HTMLDivElement>("#remoteVideos");
 
 const envDefaultWorker = import.meta.env.VITE_DEFAULT_WORKER_URL?.trim();
 const query = new URLSearchParams(window.location.search);
+const generatedId = crypto.randomUUID().slice(0, 8);
 const defaultWorker =
   query.get("worker")?.trim() || envDefaultWorker || "https://your-worker.workers.dev";
 const defaultRoom = query.get("room")?.trim() || roomIdInput.value || "main-room";
-const defaultUserId = query.get("userId")?.trim() || userIdInput.value || "user-1";
-const defaultAlias = query.get("alias")?.trim() || aliasInput.value || "alice";
+const defaultUserId = query.get("userId")?.trim() || `user-${generatedId}`;
+const defaultAlias = query.get("alias")?.trim() || `peer-${generatedId.slice(0, 4)}`;
 const defaultJoinToken = query.get("token")?.trim() || "";
 const defaultInternalSecret = query.get("internalSecret")?.trim() || "";
 const shouldAutoConnect = ["1", "true", "yes"].includes(
@@ -326,13 +327,32 @@ async function connect(): Promise<void> {
 
   let rtcConfiguration: RTCConfiguration | undefined;
   try {
-    const turn = await client.fetchTurnCredentials();
+    let turn = await client.fetchTurnCredentials();
+    if (!turn?.iceServers) {
+      throw new Error("ICE credentials response missing iceServers");
+    }
     rtcConfiguration = {
       iceServers: turn.iceServers as unknown as RTCIceServer[],
     };
     appendLog(eventLog, `Fetched ICE servers (${turn.iceServers.length}).`);
   } catch (error) {
-    appendLog(eventLog, `TURN fetch skipped/failing: ${(error as Error).message}`);
+    const message = (error as Error).message ?? String(error);
+    if (message.includes("(401)")) {
+      appendLog(eventLog, "Join token rejected (401); issuing a fresh token and retrying once.");
+      token = await issueTokenValue();
+      joinTokenInput.value = token;
+      try {
+        const turn = await client.fetchTurnCredentials();
+        rtcConfiguration = {
+          iceServers: turn.iceServers as unknown as RTCIceServer[],
+        };
+        appendLog(eventLog, `Fetched ICE servers after token refresh (${turn.iceServers.length}).`);
+      } catch (retryError) {
+        appendLog(eventLog, `ICE credentials fetch still failing after token refresh: ${(retryError as Error).message}`);
+      }
+    } else {
+      appendLog(eventLog, `ICE credentials fetch skipped/failing: ${message}`);
+    }
   }
 
   const meshClient = new WebRTCMeshClient({
@@ -344,7 +364,16 @@ async function connect(): Promise<void> {
 
   bindMeshEvents(meshClient);
 
-  await meshClient.start();
+  try {
+    await meshClient.start();
+  } catch (error) {
+    const message = (error as Error).message ?? String(error);
+    if (message.includes("before session established (1006)")) {
+      appendLog(eventLog, "WebSocket failed before session established. Clearing stale token; click Connect again.");
+      joinTokenInput.value = "";
+    }
+    throw error;
+  }
 
   if (localStream) {
     for (const track of localStream.getTracks()) {

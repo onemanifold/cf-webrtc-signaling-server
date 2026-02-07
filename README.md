@@ -37,6 +37,7 @@ node scripts/deploy-guided.mjs --cf-api-token <CLOUDFLARE_API_TOKEN>
 What the guided script does:
 - Deploys Worker + Durable Objects.
 - Verifies Worker health at `https://<worker>.<subdomain>.workers.dev/health`.
+- Optionally runs a CLI smoke test (`scripts/smoke-signal.mjs`) with two headless peers.
 - Writes local `credentials.json` (gitignored).
 - Optionally bootstraps GitHub repo/environment/secrets/variables.
 - Ensures GitHub Pages is enabled in workflow mode before Pages deploy.
@@ -220,6 +221,7 @@ Optional:
 - Never expose `JOIN_TOKEN_SECRET`, `INTERNAL_API_SECRET`, `TURN_SHARED_SECRET` to clients.
 - `/token/issue` is dev-only and controlled by `ALLOW_DEV_TOKEN_ISSUER`.
 - Default dev flow allows token issue without client secret; if you want a locked issuer flow, require and validate a secret in your deployment policy.
+- `/turn-credentials` is also used as ICE bootstrap (returns STUN even when TURN URLs are unset).
 
 ## Billing Note
 Workers has a free tier and does not require Zero Trust for this project.

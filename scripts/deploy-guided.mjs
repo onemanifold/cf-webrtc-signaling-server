@@ -974,6 +974,14 @@ async function main() {
       defaultValue: true,
       nonInteractive,
     });
+    const shouldRunSmoke =
+      shouldDeploy &&
+      (await chooseBoolean({
+        rl,
+        prompt: "Run CLI signaling smoke test after deploy (2 headless peers)?",
+        defaultValue: true,
+        nonInteractive,
+      }));
 
     let wranglerContent = await readFile(WRANGLER_PATH, "utf8");
     wranglerContent = upsertTopLevelKey(wranglerContent, "name", workerName);
@@ -1032,6 +1040,18 @@ async function main() {
       output.write(`Verifying Worker health at ${workerUrl}/health ...\n`);
       await verifyWorkerHealth(workerUrl);
       output.write("Worker health check passed.\n");
+      if (shouldRunSmoke) {
+        const smokeRoom = `smoke-${randomBytes(4).toString("hex")}`;
+        output.write(`Running CLI signaling smoke test in room '${smokeRoom}'...\n`);
+        await runCommand("node", ["scripts/smoke-signal.mjs"], {
+          env: {
+            ...envOverrides,
+            BASE_URL: workerUrl,
+            ROOM_ID: smokeRoom,
+          },
+        });
+        output.write("CLI signaling smoke test passed.\n");
+      }
     } else {
       output.write("\nConfiguration and secrets are set. Deploy skipped.\n");
     }
